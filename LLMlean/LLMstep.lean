@@ -20,7 +20,7 @@ def runSuggest (goal pre ctx: String) (api : Option Config.API := none) :
     | some api => pure api
     -- if the API is provided, use the one found in the configuration.
     | none => getConfiguredAPI Config.TacticKind.LLMStep
-  
+
   let s ← api.tacticGeneration goal ctx pre
   return s
 

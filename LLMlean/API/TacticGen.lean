@@ -108,7 +108,7 @@ def tacticGenerationOllama (pfx : String) (prompts : List String)
 
 
 /-!
-## Ollama with markdown output (e.g., Kimina Prover)
+## Ollama with markdown output (e.g., Kimina-Prover)
 -/
 
 /--
@@ -162,6 +162,33 @@ def tacticGenerationOllamaMarkdown (_pfx : String) (context : String) (prompts :
   return finalResults
 
 /-!
+## Ollama with tactic output (e.g., BFS-Prover)
+-/
+def tacticGenerationOllamaTactic (pfx : String) (prompts : List String)
+(api : API) (options : ChatGenerationOptions) : IO $ Array (String × Float) := do
+  let mut results : Std.HashSet String := Std.HashSet.emptyWithCapacity
+  for prompt in prompts do
+    for i in List.range options.numSamples do
+      let temperature := if i == 1 then 0.0 else options.temperature
+      let req : OllamaGenerationRequest := {
+        model := api.model,
+        prompt := prompt,
+        stream := false,
+        options := {
+          temperature := temperature,
+          num_predict := options.maxTokens,
+          stop := options.stopSequences
+        }
+      }
+      let res : OllamaResponse ← post req api.baseUrl api.key
+      let tactic := res.response
+      if tactic.startsWith pfx.trim then
+        results := results.insert tactic
+
+  let finalResults := (results.toArray.filter filterGeneration).map fun x => (x, 1.0)
+  return finalResults
+
+/-!
 ## Main Handler
 -/
 
@@ -178,6 +205,8 @@ def LLMlean.Config.API.tacticGeneration
       match api.responseFormat with
       | ResponseFormat.Markdown =>
           tacticGenerationOllamaMarkdown «prefix» context prompts api options
+      | ResponseFormat.Tactic =>
+          tacticGenerationOllamaTactic «prefix» prompts api options
       | _ =>
           tacticGenerationOllama «prefix» prompts api options
     | APIKind.TogetherAI =>

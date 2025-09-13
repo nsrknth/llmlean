@@ -142,6 +142,14 @@ If you find it helpful, you can precede the proof with brief thoughts. When you 
   | pre => [p1 ++ s!"The tactic you generate should start with {pre}"]
 
 /--
+See `makePrompts`.
+-/
+def makePromptsTacticState (_context : String) (state : String) (_pre: String) : List String :=
+  let sep := ":::"
+  let p1 := state ++ sep
+  [p1]
+
+/--
 See `makeQedPrompts`.
 TODO implement
 -/
@@ -238,6 +246,7 @@ def makePrompts (promptKind : PromptKind) (context : String) (state : String) (p
   | PromptKind.Reasoning => makePromptsReasoning context state pre
   | PromptKind.Instruction => makePromptsInstruct context state pre
   | PromptKind.MarkdownReasoning => makePromptsMarkdownReasoning context state pre
+  | PromptKind.TacticState => makePromptsTacticState context state pre
 
 
 /--
@@ -251,6 +260,7 @@ def makeQedPrompts (promptKind : PromptKind) (context : String) (state : String)
   | PromptKind.Reasoning => makeQedPromptsReasoning context state
   | PromptKind.Instruction => makeQedPromptsInstruct context state
   | PromptKind.MarkdownReasoning => makeQedPromptsMarkdownReasoning context state
+  | PromptKind.TacticState => makePromptsTacticState context state ""
 
 def makeQedRefinementPromptsFewShot (context : String) (_state : String)
     (previousAttempt : String) (errorMsg : String) : List String :=
@@ -350,5 +360,6 @@ def makeQedRefinementPrompts (promptKind : PromptKind) (context : String) (state
   | PromptKind.Instruction => makeQedRefinementPromptsInstruct context state previousAttempt errorMsg
   | PromptKind.Reasoning => makeQedRefinementPromptsReasoning context state previousAttempt errorMsg
   | PromptKind.MarkdownReasoning => makeQedRefinementPromptsMarkdownReasoning context state previousAttempt errorMsg
+  | PromptKind.TacticState => makePromptsTacticState context state ""
 
 end LLMlean

@@ -1,4 +1,3 @@
-
 # Ollama Models
 
 This document provides a list of models for proving that are available on [Ollama](https://ollama.com/).
@@ -62,3 +61,11 @@ responseFormat = "markdown"
 ### Performance Tips for Kimina Models
 
 - **Set `numSamples` to a small number**: These models generate detailed reasoning chains, so using fewer samples is recommended for better performance
+
+## BFS Provers
+
+[BFS-Prover series](https://huggingface.co/ByteDance-Seed/BFS-Prover) are open-source step-level provers developed by ByteDance Seed team.
+
+**Tips for BFS-Prover models:**
+- These models were trained to use the current tactic state as input and the preceding tactic as output, so you must set `prompt = "tacticstate"`, `responseFormat = "tactic"` and `mode = "parallel"`.
+- Currently `llmqed` functions the same as `llmstep ""`.
