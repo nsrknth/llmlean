@@ -4,7 +4,7 @@ LLMlean integrates LLMs and Lean for tactic suggestions, proof completion, and m
 
 ## News
 
-- **09/2025**: Added support for [BFS-Prover-V2](https://arxiv.org/abs/2509.06493) and [BFS-Prover-V1](https://arxiv.org/abs/2502.03438) via Ollama
+- **10/2025**: Added support for [BFS-Prover-V2](https://arxiv.org/abs/2509.06493) and [BFS-Prover-V1](https://arxiv.org/abs/2502.03438) via Ollama
 - **06/2025**: Introduced iterative refinement mode for proof generation
 - **06/2025**: Added support for [Kimina-Prover](https://arxiv.org/abs/2504.11354) models via Ollama (thanks to @BoltonBailey)
 

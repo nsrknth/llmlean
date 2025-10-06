@@ -64,25 +64,47 @@ responseFormat = "markdown"
 
 ## BFS Provers
 
-The BFS-Prover series ([BFS-Prover-V2](https://arxiv.org/abs/2509.06493) and [BFS-Prover-V1](https://arxiv.org/abs/2502.03438)) are open-source step-level provers developed by ByteDance Seed team.
+The [BFS-Prover series](https://huggingface.co/collections/ByteDance-Seed/bfs-prover-68db961a5fdf9de045440230) ([BFS-Prover-V2](https://arxiv.org/abs/2509.06493) and [BFS-Prover-V1](https://arxiv.org/abs/2502.03438)) are open-source step-level provers developed by ByteDance Seed team.
 
-### `BFS-Prover-V1-7B`
+You can pull any verison of the BFS-Prover-V2 model directly via Ollama:
 
-You can pull the model with command:
+### 7B version
 
 ```bash
-ollama pull zeyu-zheng/BFS-Prover-V1-7B
+ollama pull zeyu-zheng/BFS-Prover-V2-7B
 ```
-Or pull the quantized `q8_0 version:
+Or pull the quantized `q8_0` version:
 ```bash
-ollama pull zeyu-zheng/BFS-Prover-V1-7B:q8_0
+ollama pull zeyu-zheng/BFS-Prover-V2-7B:q8_0
 ```
 
 and set configuration variables in `~/.config/llmlean/config.toml`:
 
 ```toml
 api = "ollama"
-model = "BFS-Prover"
+model = "zeyu-zheng/BFS-Prover-V2-7B"
+mode = "parallel"
+numSamples = "5"
+prompt = "tacticstate"
+responseFormat = "tactic"
+```
+
+### 32B version
+
+```bash
+ollama pull zeyu-zheng/BFS-Prover-V2-32B
+```
+Or pull the quantized `f16` / `q8_0` version:
+```bash
+ollama pull zeyu-zheng/BFS-Prover-V2-32B:f16
+ollama pull zeyu-zheng/BFS-Prover-V2-32B:q8_0
+```
+
+and set configuration variables in `~/.config/llmlean/config.toml`:
+
+```toml
+api = "ollama"
+model = "zeyu-zheng/BFS-Prover-V2-32B" or "zeyu-zheng/BFS-Prover-V2-32B:f16" or "zeyu-zheng/BFS-Prover-V2-32B:q8_0"
 mode = "parallel"
 numSamples = "5"
 prompt = "tacticstate"
