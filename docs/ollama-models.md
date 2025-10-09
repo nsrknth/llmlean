@@ -1,4 +1,3 @@
-
 # Ollama Models
 
 This document provides a list of models for proving that are available on [Ollama](https://ollama.com/).
@@ -62,3 +61,57 @@ responseFormat = "markdown"
 ### Performance Tips for Kimina Models
 
 - **Set `numSamples` to a small number**: These models generate detailed reasoning chains, so using fewer samples is recommended for better performance
+
+## BFS Provers
+
+The [BFS-Prover series](https://huggingface.co/collections/ByteDance-Seed/bfs-prover-68db961a5fdf9de045440230) ([BFS-Prover-V2](https://arxiv.org/abs/2509.06493) and [BFS-Prover-V1](https://arxiv.org/abs/2502.03438)) are open-source step-level provers developed by ByteDance Seed team.
+
+You can pull any verison of the BFS-Prover-V2 model directly via Ollama:
+
+### 7B version
+
+```bash
+ollama pull zeyu-zheng/BFS-Prover-V2-7B
+```
+Or pull the quantized `q8_0` version:
+```bash
+ollama pull zeyu-zheng/BFS-Prover-V2-7B:q8_0
+```
+
+and set configuration variables in `~/.config/llmlean/config.toml`:
+
+```toml
+api = "ollama"
+model = "zeyu-zheng/BFS-Prover-V2-7B"
+mode = "parallel"
+numSamples = "5"
+prompt = "tacticstate"
+responseFormat = "tactic"
+```
+
+### 32B version
+
+```bash
+ollama pull zeyu-zheng/BFS-Prover-V2-32B
+```
+Or pull the quantized `f16` / `q8_0` version:
+```bash
+ollama pull zeyu-zheng/BFS-Prover-V2-32B:f16
+ollama pull zeyu-zheng/BFS-Prover-V2-32B:q8_0
+```
+
+and set configuration variables in `~/.config/llmlean/config.toml`:
+
+```toml
+api = "ollama"
+model = "zeyu-zheng/BFS-Prover-V2-32B" or "zeyu-zheng/BFS-Prover-V2-32B:f16" or "zeyu-zheng/BFS-Prover-V2-32B:q8_0"
+mode = "parallel"
+numSamples = "5"
+prompt = "tacticstate"
+responseFormat = "tactic"
+```
+
+### Tips for BFS-Prover models
+- These models were trained to use the current tactic state as input and the preceding tactic as output, so you must set `prompt = "tacticstate"`, `responseFormat = "tactic"` and `mode = "parallel"`.
+- You can increase `numSamples` (e.g. 5, 10, …) to sample multiple tactics for each state.
+- Currently `llmqed` functions the same as `llmstep ""`.

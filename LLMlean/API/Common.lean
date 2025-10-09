@@ -108,11 +108,13 @@ def getPromptKind (stringArg: String) : PromptKind :=
   | "fewshot" => PromptKind.FewShot
   | "reasoning" => PromptKind.Reasoning
   | "markdown" => PromptKind.MarkdownReasoning
+  | "tacticstate" => PromptKind.TacticState
   | _ => PromptKind.Instruction
 
 def getResponseFormat (stringArg: String) : ResponseFormat :=
   match stringArg with
   | "markdown" => ResponseFormat.Markdown
+  | "tactic" => ResponseFormat.Tactic
   | _ => ResponseFormat.Standard
 
 /-- Gets the configured API, with details coming either from environment variables or the contents of the `config.toml` file. -/
@@ -121,29 +123,29 @@ def getConfiguredAPI (tacticKind : TacticKind) : CoreM API := do
   let apiKindStr := (← Config.getApiKind).getD "ollama"
   let some apiKind := Config.parseAPIKind apiKindStr
     | throwError s!"Unknown API kind: {apiKindStr}"
-  
+
   -- Get defaults for this API and tactic combination
   let defaults := Config.getDefaultsForAPI apiKind tacticKind
-  
+
   -- Override defaults with any configured values
   let url := (← Config.getEndpoint).getD defaults.endpoint
   let model := (← Config.getModel).getD defaults.model
   let apiKey := (← Config.getApiKey).getD ""
-  
+
   -- Handle prompt kind
   let promptKindStr := (← Config.getPromptKind).getD ""
   let promptKind := if promptKindStr != "" then
     getPromptKind promptKindStr
   else
     defaults.promptKind
-  
+
   -- Handle response format
   let responseFormatStr := (← Config.getResponseFormat).getD ""
   let responseFormat := if responseFormatStr != "" then
     getResponseFormat responseFormatStr
   else
     defaults.responseFormat
-  
+
   let api : API := {
     model := model,
     baseUrl := url,
@@ -152,7 +154,7 @@ def getConfiguredAPI (tacticKind : TacticKind) : CoreM API := do
     responseFormat := responseFormat,
     key := apiKey
   }
-  
+
   return api
 
 def post {α β : Type} [ToJson α] [FromJson β] (req : α) (url : String) (apiKey : String): IO β := do
@@ -185,7 +187,7 @@ def filterGeneration (s: String) : Bool :=
 def getNumSamples (api : API) (tacticKind : TacticKind) : CoreM Nat := do
   -- Get defaults for this API and tactic
   let defaults := Config.getDefaultsForAPI api.kind tacticKind
-  
+
   -- Check if mode is explicitly set
   let modeStr ← Config.getMode
   let mode := if modeStr == "iterative" then
@@ -194,7 +196,7 @@ def getNumSamples (api : API) (tacticKind : TacticKind) : CoreM Nat := do
     Config.GenerationMode.Parallel
   else
     defaults.mode
-  
+
   match mode with
   | Config.GenerationMode.Iterative =>
     -- In iterative mode, always use 1 sample

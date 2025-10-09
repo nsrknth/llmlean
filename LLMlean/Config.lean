@@ -50,11 +50,11 @@ register_option llmlean.maxTokens : Nat := {
 
 register_option llmlean.responseFormat : String := {
   defValue := "",
-  descr := "If set, response format for the LLM (e.g. standard, markdown)"
+  descr := "If set, response format for the LLM (e.g. standard, markdown, tactic)"
 }
 
 register_option llmlean.mode : String := {
-  defValue := "iterative",
+  defValue := "parallel",
   descr := "Generation mode: 'parallel' (generate multiple samples) or 'iterative' (refine on errors)"
 }
 
@@ -221,15 +221,17 @@ inductive APIKind : Type
   deriving Inhabited, Repr
 
 inductive PromptKind : Type
-  | FewShot
-  | Instruction
-  | Reasoning
-  | MarkdownReasoning
+  | FewShot                -- few-shot examples
+  | Instruction            -- instruction-tuned models
+  | Reasoning              -- reasoning models
+  | MarkdownReasoning      -- markdown format with prior contexts
+  | TacticState            -- use current tactic state only
   deriving Inhabited, Repr
 
 inductive ResponseFormat : Type
   | Standard     -- [TAC]...[/TAC] and [PROOF]...[/PROOF] format
   | Markdown     -- ```lean4...``` format
+  | Tactic       -- tactic only
   deriving Inhabited, Repr
 
 structure API where
