@@ -4,7 +4,7 @@ LLMlean integrates LLMs and Lean for tactic suggestions, proof completion, and m
 
 ## News
 
-- **10/2025**: Added support for [BFS-Prover-V2](https://arxiv.org/abs/2509.06493) and [BFS-Prover-V1](https://arxiv.org/abs/2502.03438) via Ollama
+- **10/2025**: Added support for [BFS-Prover-V2](https://arxiv.org/abs/2509.06493) and [BFS-Prover-V1](https://arxiv.org/abs/2502.03438) via Ollama (thanks to [@zeyu-zheng](https://github.com/zeyu-zheng)) [[setup docs](docs/ollama-models.md#bfs-provers)]
 - **06/2025**: Introduced iterative refinement mode for proof generation
 - **06/2025**: Added support for [Kimina-Prover](https://arxiv.org/abs/2504.11354) models via Ollama (thanks to @BoltonBailey)
 
@@ -61,7 +61,11 @@ model = "wellecks/ntpctx-llama3-8b" # model name from above
 
 Then do steps (3) and (4) above. Now use a tactic described below.
 
-Note that there are multiple Lean models available for download from Ollama, including [Kimina Prover](https://arxiv.org/abs/2504.11354) models which use chain-of-thought reasoning. You can find a list of these models and how to configure them in the [Ollama Models](docs/ollama-models.md) document.
+Many models are available for use in LLMLean via Ollama, including:
+- **[BFS-Prover-V2](docs/ollama-models.md#bfs-provers) (highly recommended for `llmstep`)**
+- **[Kimina Prover](docs/ollama-models.md#kimina-models)**
+
+You can find detailed setup instructions and configuration for these and other models in the [Ollama Models](docs/ollama-models.md) document.
 
 
 ## Tactics
