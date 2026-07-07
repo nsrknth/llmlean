@@ -220,6 +220,17 @@ def firstPath? (json : Json) : List (List String) → Option Json
       | some value => some value
       | none => firstPath? json rest
 
+def stringAtPath? (json : Json) (path : List String) : Option String := do
+  let value ← atPath? json path
+  value.getStr?.toOption
+
+def firstStringPath? (json : Json) : List (List String) → Option String
+  | [] => none
+  | path :: rest =>
+      match stringAtPath? json path with
+      | some value => some value
+      | none => firstStringPath? json rest
+
 def resultFor? (expected : RequestId) (message : Json) : Option Json := do
   let actual ← natId? message
   if actual == expected then field? message "result" else none
@@ -381,5 +392,32 @@ def finalAgentMessage? (message : Json) : Option String :=
   match last? (extractAgentMessages message) with
   | some text => some text
   | none => last? (extractMessageTexts message)
+
+def isAgentTextMethod (method : String) : Bool :=
+  method == "item/agentMessage/delta" ||
+  method == "item/agentMessage" ||
+  method == "agentMessage/delta" ||
+  method == "turn/agent_message_delta" ||
+  method == "turn/agent_message"
+
+def agentTextUpdate? (message : Json) : Option String := do
+  let method ← method? message
+  if isAgentTextMethod method then
+    match firstPath? message [["params", "item"], ["params", "message"]] with
+    | some item =>
+        match itemText? item with
+        | some text => some text
+        | none => firstStringPath? message [
+            ["params", "delta"],
+            ["params", "text"],
+            ["params", "content"]
+          ]
+    | none => firstStringPath? message [
+        ["params", "delta"],
+        ["params", "text"],
+        ["params", "content"]
+      ]
+  else
+    none
 
 end LLMlean.Codex.Protocol

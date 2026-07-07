@@ -16,7 +16,7 @@ structure AppServer where
   }
 
 inductive TurnOutcome where
-  | completed (message : Json)
+  | completed (message : Json) (finalText? : Option String)
   | failed (message : Json)
   | cancelled (message : Json)
   | inputRequired (message : Json)
@@ -207,11 +207,26 @@ def AppServer.maybeRejectUnsupportedToolCall (server : AppServer) (message : Jso
   else
     return false
 
+def appendAgentText (accumulated : String) (message : Json) : String :=
+  match agentTextUpdate? message with
+  | some text => accumulated ++ text
+  | none => accumulated
+
+def completedText? (message : Json) (accumulated : String) : Option String :=
+  match finalAgentMessage? message with
+  | some text => some text
+  | none =>
+      if accumulated.trim.length > 0 then
+        some accumulated
+      else
+        none
+
 partial def awaitTurnLoop
     (server : AppServer)
     (timeoutMs : Nat)
     (startedAt : Nat)
-    (autoApprove : Bool) : IO TurnOutcome := do
+    (autoApprove : Bool)
+    (accumulated : String) : IO TurnOutcome := do
   let readTimeout ←
     if timeoutMs == 0 then
       pure 0
@@ -223,36 +238,37 @@ partial def awaitTurnLoop
         pure (timeoutMs - elapsed)
   let some message ← server.tryReadMessage readTimeout
     | return TurnOutcome.timedOut
+  let accumulated := appendAgentText accumulated message
   if turnCompleted? message then
-    return TurnOutcome.completed message
+    return TurnOutcome.completed message (completedText? message accumulated)
   else if turnFailed? message then
     return TurnOutcome.failed message
   else if turnCancelled? message then
     return TurnOutcome.cancelled message
   else if ← server.maybeRejectUnsupportedToolCall message then
-    awaitTurnLoop server timeoutMs startedAt autoApprove
+    awaitTurnLoop server timeoutMs startedAt autoApprove accumulated
   else
     match approvalResponseFor? message with
     | some response =>
         if autoApprove then
           server.send response
-          awaitTurnLoop server timeoutMs startedAt autoApprove
+          awaitTurnLoop server timeoutMs startedAt autoApprove accumulated
         else
           return TurnOutcome.inputRequired message
     | none =>
         if needsInput? message then
           return TurnOutcome.inputRequired message
         else
-          awaitTurnLoop server timeoutMs startedAt autoApprove
+          awaitTurnLoop server timeoutMs startedAt autoApprove accumulated
 
 def AppServer.awaitTurn
     (server : AppServer)
     (timeoutMs : Nat)
     (autoApprove : Bool := false) : IO TurnOutcome := do
-  awaitTurnLoop server timeoutMs (← IO.monoMsNow) autoApprove
+  awaitTurnLoop server timeoutMs (← IO.monoMsNow) autoApprove ""
 
 def TurnOutcome.finalText? : TurnOutcome → Option String
-  | .completed message => finalAgentMessage? message
+  | .completed _ text => text
   | _ => none
 
 def AppServer.terminate (server : AppServer) : IO Unit := do
