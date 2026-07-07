@@ -212,6 +212,8 @@ def LLMlean.Config.API.proofCompletion
       qedOpenAI prompts api options
     | APIKind.Anthropic =>
       qedAnthropic prompts api options
+    | APIKind.Codex =>
+      throwError "Codex app-server is not supported through the generic proofCompletion provider path"
 
 /--
 Generates proof completions with refinement context using the LLM API.
@@ -234,5 +236,7 @@ def LLMlean.Config.API.proofCompletionRefinement
       qedOpenAI prompts api options
     | APIKind.Anthropic =>
       qedAnthropic prompts api options
+    | APIKind.Codex =>
+      throwError "Codex app-server is not supported through the generic proofCompletionRefinement provider path"
 
 end LLMlean

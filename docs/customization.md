@@ -34,6 +34,31 @@ Set each variable in the configuration file, as indicated in [README](../README.
 
 **Note on Iterative Refinement**: This mode works particularly well with models that can understand and learn from error messages. We recommend using instruction-tuned models with the `reasoning` prompt type for best results.
 
+#### Codex app-server (planned)
+
+The `codex` API kind is reserved for a native Codex app-server `llmqed` backend. The generic
+request-response provider path does not use it yet.
+
+Configuration variables:
+
+- `api`:
+  - `codex`: select the Codex app-server backend
+- `codexCommand`:
+  - Command used to start app-server, defaulting to `codex app-server`
+- `codexReadTimeoutMs`:
+  - Timeout for app-server request/response handshakes, defaulting to `5000`
+- `codexTurnTimeoutMs`:
+  - Timeout for one Codex turn, defaulting to `120000`
+
+Environment variables:
+
+```bash
+export LLMLEAN_API=codex
+export LLMLEAN_CODEX_COMMAND='codex app-server'
+export LLMLEAN_CODEX_READ_TIMEOUT_MS=5000
+export LLMLEAN_CODEX_TURN_TIMEOUT_MS=120000
+```
+
 #### LLM on your laptop
 - `api`:
   - `ollama` : to use ollama (default)

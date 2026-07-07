@@ -215,5 +215,7 @@ def LLMlean.Config.API.tacticGeneration
       tacticGenerationOpenAI «prefix» prompts api options
     | APIKind.Anthropic =>
       tacticGenerationAnthropic «prefix» prompts api options
+    | APIKind.Codex =>
+      throwError "Codex app-server is not supported through the generic llmstep provider path"
 
 end LLMlean

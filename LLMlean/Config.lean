@@ -9,6 +9,15 @@ namespace LLMlean.Config
 /-- Default maximum iterations for iterative refinement mode -/
 def defaultMaxIterations : Nat := 3
 
+/-- Default command used to start Codex app-server. -/
+def defaultCodexCommand : String := "codex app-server"
+
+/-- Default timeout, in milliseconds, for app-server request/response handshakes. -/
+def defaultCodexReadTimeoutMs : Nat := 5000
+
+/-- Default timeout, in milliseconds, for a Codex app-server turn. -/
+def defaultCodexTurnTimeoutMs : Nat := 120000
+
 -- Register trace class for LLMlean
 initialize registerTraceClass `llmlean
 
@@ -61,6 +70,21 @@ register_option llmlean.mode : String := {
 register_option llmlean.maxIterations : Nat := {
   defValue := defaultMaxIterations,
   descr := s!"Maximum refinement iterations in iterative mode (default: {defaultMaxIterations})"
+}
+
+register_option llmlean.codexCommand : String := {
+  defValue := "",
+  descr := s!"If set, command used to start Codex app-server (default: {defaultCodexCommand})"
+}
+
+register_option llmlean.codexReadTimeoutMs : Nat := {
+  defValue := 0,
+  descr := s!"If nonzero, app-server request timeout in milliseconds (default: {defaultCodexReadTimeoutMs})"
+}
+
+register_option llmlean.codexTurnTimeoutMs : Nat := {
+  defValue := 0,
+  descr := s!"If nonzero, Codex app-server turn timeout in milliseconds (default: {defaultCodexTurnTimeoutMs})"
 }
 
 
@@ -203,6 +227,51 @@ def getMaxIterations : CoreM Nat := do
     -- Use the explicitly set value
     return optValue
 
+def getCodexCommand : CoreM String := do
+  match llmlean.codexCommand.get (← getOptions) with
+  | "" =>
+    match ← IO.getEnv "LLMLEAN_CODEX_COMMAND" with
+    | none =>
+      match ← getFromConfigFile `codexCommand with
+      | none => return defaultCodexCommand
+      | some command => return command
+    | some command => return command
+  | command => return command
+
+def getCodexReadTimeoutMs : CoreM Nat := do
+  match llmlean.codexReadTimeoutMs.get (← getOptions) with
+  | 0 =>
+    match ← IO.getEnv "LLMLEAN_CODEX_READ_TIMEOUT_MS" with
+    | some timeout =>
+      match timeout.toNat? with
+      | some value => return value
+      | none => return defaultCodexReadTimeoutMs
+    | none =>
+      match ← getFromConfigFile `codexReadTimeoutMs with
+      | some timeout =>
+        match timeout.toNat? with
+        | some value => return value
+        | none => return defaultCodexReadTimeoutMs
+      | none => return defaultCodexReadTimeoutMs
+  | timeout => return timeout
+
+def getCodexTurnTimeoutMs : CoreM Nat := do
+  match llmlean.codexTurnTimeoutMs.get (← getOptions) with
+  | 0 =>
+    match ← IO.getEnv "LLMLEAN_CODEX_TURN_TIMEOUT_MS" with
+    | some timeout =>
+      match timeout.toNat? with
+      | some value => return value
+      | none => return defaultCodexTurnTimeoutMs
+    | none =>
+      match ← getFromConfigFile `codexTurnTimeoutMs with
+      | some timeout =>
+        match timeout.toNat? with
+        | some value => return value
+        | none => return defaultCodexTurnTimeoutMs
+      | none => return defaultCodexTurnTimeoutMs
+  | timeout => return timeout
+
 
 /-!
 ## Data Structures for configuration options
@@ -218,6 +287,7 @@ inductive APIKind : Type
   | TogetherAI
   | OpenAI
   | Anthropic
+  | Codex
   deriving Inhabited, Repr
 
 inductive PromptKind : Type
@@ -376,6 +446,25 @@ def getDefaultsForAPI (apiKind : APIKind) (tactic : TacticKind) : APIDefaults :=
       maxTokens := 1024
       endpoint := "https://api.together.xyz/v1/chat/completions"
     }
+  -- Codex app-server defaults. Empty model/endpoint means Codex uses its configured defaults.
+  | APIKind.Codex, TacticKind.LLMStep => {
+      model := ""
+      mode := GenerationMode.Parallel
+      promptKind := PromptKind.Reasoning
+      responseFormat := ResponseFormat.Markdown
+      numSamples := 1
+      maxTokens := 512
+      endpoint := ""
+    }
+  | APIKind.Codex, TacticKind.LLMQed => {
+      model := ""
+      mode := GenerationMode.Parallel
+      promptKind := PromptKind.Reasoning
+      responseFormat := ResponseFormat.Markdown
+      numSamples := 1
+      maxTokens := 2048
+      endpoint := ""
+    }
 
 /-- Parse API kind from string -/
 def parseAPIKind (apiStr : String) : Option APIKind :=
@@ -384,6 +473,7 @@ def parseAPIKind (apiStr : String) : Option APIKind :=
   | "openai" => some APIKind.OpenAI
   | "anthropic" => some APIKind.Anthropic
   | "together" => some APIKind.TogetherAI
+  | "codex" => some APIKind.Codex
   | _ => none
 
 end LLMlean.Config
