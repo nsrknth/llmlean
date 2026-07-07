@@ -1,6 +1,7 @@
 /- Tactic generation for LLMlean -/
 import LLMlean.API.Common
 import LLMlean.API.Prompts
+import LLMlean.API.Codex.Completion
 
 open Lean LLMlean.Config
 
@@ -77,6 +78,24 @@ def tacticGenerationAnthropic (pfx : String) (prompts : List String)
 
   let finalResults := (results.toArray.filter filterGeneration).map fun x => (x, 1.0)
   return finalResults
+
+/-!
+## Codex app-server
+-/
+
+def codexTacticModel? (api : API) : Option String :=
+  if api.model.trim == "" then none else some api.model
+
+def tacticGenerationCodex (pfx : String) (prompts : List String)
+(api : API) : CoreM $ Array (String × Float) := do
+  let some prompt := prompts.head?
+    | return #[]
+  let response ← LLMlean.Codex.Completion.runConfiguredPrompt prompt (codexTacticModel? api)
+  let tactic := pfx ++ splitTac response
+  if filterGeneration tactic then
+    return #[(tactic, 1.0)]
+  else
+    return #[]
 
 /-!
 ## Ollama
@@ -216,6 +235,6 @@ def LLMlean.Config.API.tacticGeneration
     | APIKind.Anthropic =>
       tacticGenerationAnthropic «prefix» prompts api options
     | APIKind.Codex =>
-      throwError "Codex app-server is not supported through the generic llmstep provider path"
+      tacticGenerationCodex «prefix» prompts api
 
 end LLMlean

@@ -1,6 +1,7 @@
 /- Proof completion for LLMlean -/
 import LLMlean.API.Common
 import LLMlean.API.Prompts
+import LLMlean.API.Codex.Completion
 
 open Lean LLMlean.Config
 
@@ -76,6 +77,23 @@ def qedAnthropic (prompts : List String)
 
   let finalResults := (results.toArray.filter filterGeneration).map fun x => (x, 1.0)
   return finalResults
+
+/-!
+## Codex app-server
+-/
+
+def codexProofModel? (api : API) : Option String :=
+  if api.model.trim == "" then none else some api.model
+
+def qedCodex (prompts : List String) (api : API) : CoreM $ Array (String × Float) := do
+  let some prompt := prompts.head?
+    | return #[]
+  let response ← LLMlean.Codex.Completion.runConfiguredPrompt prompt (codexProofModel? api)
+  let proof := splitProof response
+  if filterGeneration proof then
+    return #[(proof, 1.0)]
+  else
+    return #[]
 
 /-!
 ## Ollama
@@ -213,7 +231,7 @@ def LLMlean.Config.API.proofCompletion
     | APIKind.Anthropic =>
       qedAnthropic prompts api options
     | APIKind.Codex =>
-      throwError "Codex app-server is not supported through the generic proofCompletion provider path"
+      qedCodex prompts api
 
 /--
 Generates proof completions with refinement context using the LLM API.
@@ -237,6 +255,6 @@ def LLMlean.Config.API.proofCompletionRefinement
     | APIKind.Anthropic =>
       qedAnthropic prompts api options
     | APIKind.Codex =>
-      throwError "Codex app-server is not supported through the generic proofCompletionRefinement provider path"
+      qedCodex prompts api
 
 end LLMlean
