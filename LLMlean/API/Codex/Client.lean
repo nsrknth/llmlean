@@ -15,6 +15,14 @@ structure AppServer where
     stderr := IO.Process.Stdio.piped
   }
 
+inductive TurnOutcome where
+  | completed (message : Json)
+  | failed (message : Json)
+  | cancelled (message : Json)
+  | inputRequired (message : Json)
+  | timedOut
+deriving BEq
+
 private inductive LineRead where
   | line (line : String)
   | timeout
@@ -167,6 +175,85 @@ def AppServer.startTurn
   match turnIdFromResult? result with
   | some turnId => return turnId
   | none => throw <| IO.userError "Codex app-server turn/start response did not include turn.id"
+
+def approvalResponseFor? (message : Json) : Option Json := do
+  let method ← method? message
+  let id ← id? message
+  if method == "item/commandExecution/requestApproval" then
+    some (acceptForSessionResponse id)
+  else if method == "item/fileChange/requestApproval" then
+    some (acceptForSessionResponse id)
+  else if method == "execCommandApproval" then
+    some (approvedForSessionResponse id)
+  else if method == "applyPatchApproval" then
+    some (approvedForSessionResponse id)
+  else
+    none
+
+def unsupportedToolMessage (toolName : Option String) : String :=
+  match toolName with
+  | some name => s!"Unsupported dynamic tool: \"{name}\"."
+  | none => "Unsupported dynamic tool call."
+
+def AppServer.maybeRejectUnsupportedToolCall (server : AppServer) (message : Json) : IO Bool := do
+  if hasMethod message "item/tool/call" then
+    match id? message with
+    | some requestId =>
+        let params := (params? message).getD emptyParams
+        let toolName := toolCallName? params
+        server.send (dynamicToolFailure requestId (unsupportedToolMessage toolName))
+        return true
+    | none => return false
+  else
+    return false
+
+partial def awaitTurnLoop
+    (server : AppServer)
+    (timeoutMs : Nat)
+    (startedAt : Nat)
+    (autoApprove : Bool) : IO TurnOutcome := do
+  let readTimeout ←
+    if timeoutMs == 0 then
+      pure 0
+    else
+      let elapsed := (← IO.monoMsNow) - startedAt
+      if elapsed >= timeoutMs then
+        return TurnOutcome.timedOut
+      else
+        pure (timeoutMs - elapsed)
+  let some message ← server.tryReadMessage readTimeout
+    | return TurnOutcome.timedOut
+  if turnCompleted? message then
+    return TurnOutcome.completed message
+  else if turnFailed? message then
+    return TurnOutcome.failed message
+  else if turnCancelled? message then
+    return TurnOutcome.cancelled message
+  else if ← server.maybeRejectUnsupportedToolCall message then
+    awaitTurnLoop server timeoutMs startedAt autoApprove
+  else
+    match approvalResponseFor? message with
+    | some response =>
+        if autoApprove then
+          server.send response
+          awaitTurnLoop server timeoutMs startedAt autoApprove
+        else
+          return TurnOutcome.inputRequired message
+    | none =>
+        if needsInput? message then
+          return TurnOutcome.inputRequired message
+        else
+          awaitTurnLoop server timeoutMs startedAt autoApprove
+
+def AppServer.awaitTurn
+    (server : AppServer)
+    (timeoutMs : Nat)
+    (autoApprove : Bool := false) : IO TurnOutcome := do
+  awaitTurnLoop server timeoutMs (← IO.monoMsNow) autoApprove
+
+def TurnOutcome.finalText? : TurnOutcome → Option String
+  | .completed message => finalAgentMessage? message
+  | _ => none
 
 def AppServer.terminate (server : AppServer) : IO Unit := do
   match ← server.child.tryWait with
