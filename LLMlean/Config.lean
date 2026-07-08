@@ -92,6 +92,11 @@ register_option llmlean.codexCache : Bool := {
   descr := "Cache Codex app-server responses for identical prompts within the current Lean process"
 }
 
+register_option llmlean.codexPersistent : Bool := {
+  defValue := true,
+  descr := "Reuse one Codex app-server process and thread across prompts in the current Lean process"
+}
+
 register_option llmlean.validateSuggestions : Bool := {
   defValue := true,
   descr := "Validate LLM suggestions before showing them in the Infoview"
@@ -283,6 +288,18 @@ def getCodexTurnTimeoutMs : CoreM Nat := do
 
 def getCodexCache : CoreM Bool := do
   return llmlean.codexCache.get (← getOptions)
+
+def getCodexPersistent : CoreM Bool := do
+  if !llmlean.codexPersistent.get (← getOptions) then
+    return false
+  else
+    match ← IO.getEnv "LLMLEAN_CODEX_PERSISTENT" with
+    | some "false" | some "0" => return false
+    | some "true" | some "1" => return true
+    | _ =>
+      match ← getFromConfigFile `codexPersistent with
+      | some "false" | some "0" => return false
+      | _ => return true
 
 def getValidateSuggestions : CoreM Bool := do
   return llmlean.validateSuggestions.get (← getOptions)

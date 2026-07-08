@@ -1,6 +1,7 @@
 /- Single-turn completion wrapper backed by Codex app-server. -/
 import LLMlean.Config
 import LLMlean.API.Codex.Client
+import LLMlean.API.Codex.Session
 
 open Lean
 
@@ -32,6 +33,7 @@ structure Options where
   threadSandbox : Option Json := some ("read-only" : Json)
   turnSandboxPolicy : Option Json := some readOnlyTurnSandboxPolicy
   dynamicTools : Option (Array Json) := some #[]
+  persistent : Bool := true
 
 def debugPrint (options : Options) (message : String) : IO Unit := do
   if options.debug then
@@ -78,7 +80,21 @@ def turnOutcomeError : TurnOutcome → String
   | .inputRequired _ => "Codex app-server turn requires input or approval"
   | .timedOut => "Codex app-server turn timed out"
 
-def runPrompt (command : String) (prompt : String) (options : Options := {}) : IO String := do
+def toSessionOptions (options : Options) (cwd : System.FilePath) :
+    LLMlean.Codex.Session.Options := {
+  cwd := cwd,
+  title := options.title,
+  model := options.model,
+  debug := options.debug,
+  readTimeoutMs := options.readTimeoutMs,
+  turnTimeoutMs := options.turnTimeoutMs,
+  approvalPolicy := options.approvalPolicy,
+  threadSandbox := options.threadSandbox,
+  turnSandboxPolicy := options.turnSandboxPolicy,
+  dynamicTools := options.dynamicTools
+}
+
+def runPromptOneShot (command : String) (prompt : String) (options : Options := {}) : IO String := do
   let cwd ← resolveCwd options
   let cwdString := cwd.toString
   let startedAt ← IO.monoMsNow
@@ -111,6 +127,13 @@ def runPrompt (command : String) (prompt : String) (options : Options := {}) : I
         return text
     | outcome => throw <| IO.userError (turnOutcomeError outcome)
 
+def runPrompt (command : String) (prompt : String) (options : Options := {}) : IO String := do
+  let cwd ← resolveCwd options
+  if options.persistent then
+    LLMlean.Codex.Session.runPrompt command prompt (toSessionOptions options cwd)
+  else
+    runPromptOneShot command prompt { options with cwd := some cwd }
+
 def runPromptCached (command : String) (prompt : String) (options : Options := {}) : IO String := do
   let cwd ← resolveCwd options
   let key := promptCacheKey command prompt options cwd.toString
@@ -134,11 +157,13 @@ def runConfiguredPrompt (prompt : String) (model : Option String := none) : Core
   let readTimeoutMs ← LLMlean.Config.getCodexReadTimeoutMs
   let turnTimeoutMs ← LLMlean.Config.getCodexTurnTimeoutMs
   let configuredModel ← LLMlean.Config.getModel
+  let persistent ← LLMlean.Config.getCodexPersistent
   let options : Options := {
     model := firstSome model configuredModel,
     debug := (← LLMlean.Config.getVerbose),
     readTimeoutMs := readTimeoutMs,
-    turnTimeoutMs := turnTimeoutMs
+    turnTimeoutMs := turnTimeoutMs,
+    persistent := persistent
   }
   if ← LLMlean.Config.getCodexCache then
     runPromptCached command prompt options

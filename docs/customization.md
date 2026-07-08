@@ -36,10 +36,11 @@ Set each variable in the configuration file, as indicated in [README](../README.
 
 #### Codex app-server (experimental)
 
-The `codex` API kind uses Codex app-server through the current experimental provider path. Today it
-starts app-server for a cache miss, runs one turn, parses returned suggestions, and then validates
-them in Lean before display. See [codex-app-server-architecture.md](codex-app-server-architecture.md)
-for the planned persistent-session design.
+The `codex` API kind uses Codex app-server through the current experimental provider path. By
+default it lazy-starts app-server on the first explicit Codex-backed tactic call, reuses the same
+process/thread for later compatible turns in the current Lean process, parses returned suggestions,
+and then validates them in Lean before display. See
+[codex-app-server-architecture.md](codex-app-server-architecture.md) for details.
 
 Configuration variables:
 
@@ -50,7 +51,11 @@ Configuration variables:
 - `codexReadTimeoutMs`:
   - Timeout for app-server request/response handshakes, defaulting to `5000`
 - `codexTurnTimeoutMs`:
-  - Timeout for one Codex turn, defaulting to `120000`
+  - Timeout for one Codex turn, defaulting to `120000`. If a persistent Codex turn times out,
+    LLMLean terminates the app-server process and clears the cached session.
+- `codexPersistent`:
+  - Reuse one app-server process/thread across compatible prompts in the current Lean process,
+    defaulting to `true`
 
 Environment variables:
 
@@ -59,7 +64,22 @@ export LLMLEAN_API=codex
 export LLMLEAN_CODEX_COMMAND='codex app-server'
 export LLMLEAN_CODEX_READ_TIMEOUT_MS=5000
 export LLMLEAN_CODEX_TURN_TIMEOUT_MS=120000
+export LLMLEAN_CODEX_PERSISTENT=true
 ```
+
+Lean commands:
+
+```lean
+#llmlean_codex_status
+#llmlean_codex_reset
+```
+
+Use `#llmlean_codex_reset` to stop the currently cached app-server process/thread. The next
+Codex-backed `llmstep` or `llmqed` starts a fresh session.
+
+With `llmlean.verbose = true`, the Codex path logs whether the session was started or reused,
+request timings, raw response text, parsed suggestion counts, validation results, and displayed
+suggestion counts.
 
 #### LLM on your laptop
 - `api`:

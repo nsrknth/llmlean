@@ -6,11 +6,17 @@ This document describes the Codex app-server integration direction for LLMLean a
 - the official Codex speed section
 - Symphony's app-server spec and Elixir implementation under
   `app-server-example-usage/symphony`
-- the current LLMLean Codex spike in `LLMlean/API/Codex`
+- the current LLMLean Codex implementation in `LLMlean/API/Codex`
 
-The current implementation is a useful protocol smoke test. It is not yet the right editor
-architecture. The next architecture should keep a Codex app-server process and thread alive inside
-the current Lean process after the first explicit LLM tactic invocation.
+The current implementation now uses a lazy persistent Codex app-server session by default. Importing
+`LLMlean` only registers declarations/options and initializes an empty session manager; the first
+explicit Codex-backed tactic invocation starts app-server, initializes it, creates one thread, and
+later compatible requests reuse that live process/thread.
+
+The stdio transport also has a dedicated stdout reader task per app-server process. Protocol waits
+poll a closeable in-memory queue with a deadline, so a silent app-server turn can be interrupted by
+`llmlean.codexTurnTimeoutMs`; the persistent session is terminated and cleared after that turn
+failure.
 
 ## Current Conclusion
 
@@ -26,7 +32,7 @@ Codex app-server backend:
   connection -> initialize -> thread -> turn -> event stream -> optional client tools -> completion
 ```
 
-The current LLMLean spike still behaves like the first shape on every cache miss:
+The initial LLMLean spike behaved like the first shape on every cache miss:
 
 ```text
 llmstep / llmqed
@@ -40,10 +46,10 @@ llmstep / llmqed
   -> terminate app-server
 ```
 
-That is protocol-correct, but it throws away the thing app-server gives us: a live connection,
+That was protocol-correct, but it threw away the thing app-server gives us: a live connection,
 thread identity, streaming events, and reusable conversation state.
 
-The revised target is:
+The current default target is:
 
 ```text
 import LLMlean
@@ -226,15 +232,15 @@ If any of those change, the manager should start a new session or explicitly res
 
 ## Session Manager Shape
 
-The next implementation should introduce a real session manager beside the current one-shot wrapper.
+The implementation introduces a real session manager beside the current one-shot wrapper.
 
-Suggested module:
+Module:
 
 ```text
 LLMlean/API/Codex/Session.lean
 ```
 
-Suggested structures:
+Core structures:
 
 ```lean
 structure SessionKey where
@@ -255,7 +261,7 @@ structure LiveSession where
   lastUsedAtMs : Nat
 ```
 
-The exact Lean primitives for locking should be verified in code, but the behavior must be:
+The current manager uses a `Std.Mutex (Option LiveSession)`. Its behavior is:
 
 - at most one active turn per live session unless app-server concurrency is explicitly supported
 - concurrent tactic elaborations are serialized or receive a clear "Codex busy" error
@@ -329,6 +335,11 @@ While waiting, it should handle:
 - unsupported `item/tool/call`: return a clear failure result and keep reading
 - command/file approval requests: decline or fail according to policy
 - malformed non-protocol lines: verbose-log, do not crash unless they block protocol progress
+
+The process client's stdout handle is owned by one background reader task. Higher-level protocol
+reads consume queued line events. This is important in the Lean editor: per-line blocking reads make
+timeouts advisory only, while queued reads let the turn waiter return on deadline, kill the silent
+process, and unblock future tactic elaboration.
 
 ## Prompting and Candidate Extraction
 
@@ -437,6 +448,10 @@ Verbose mode should make the latency and extraction pipeline visible:
 This is necessary for editor debugging. Without it, a slow or malformed Codex response looks like an
 LLMLean tactic bug.
 
+Turn timeout behavior is now covered by a silent fake app-server smoke test. If the server accepts
+`turn/start` and then emits no more JSONL frames, LLMLean returns `Codex app-server turn timed out`,
+terminates the app-server process, and clears the cached session.
+
 ## Revised Implementation Phases
 
 ### Phase 0: Protocol Spike
@@ -458,17 +473,20 @@ This proves app-server can be driven from Lean, but it is still one-shot.
 
 ### Phase 1: Lazy Persistent Session
 
-Next best step.
+Status: implemented as the default Codex prompt path.
 
 Deliverables:
 
 - `LLMlean/API/Codex/Session.lean`
 - process/thread reuse across multiple Codex turns in one Lean process
-- serialized access to a live session
+- serialized access to a live session using `Std.Mutex`
 - compatibility key for command/cwd/model/policy/tool set
-- explicit restart/cleanup path
+- explicit cleanup path via `LLMlean.Codex.Session.stopCurrentSession`
+- user-facing `#llmlean_codex_status` and `#llmlean_codex_reset` commands
+- `llmlean.codexPersistent` toggle, enabled by default
 - verbose logs showing reuse vs startup
-- fake app-server regression test:
+- fake app-server regression smoke:
+  - one process start
   - one `initialize`
   - one `thread/start`
   - two `turn/start` calls across two suggestions
@@ -482,12 +500,16 @@ should not send two thread/start requests for the same compatible session.
 
 ### Phase 2: Editor-Safe Controls
 
+Status: partially implemented.
+
 Deliverables:
 
-- keep live experiments under `LLMleanTest/Manual`
-- document that default builds should not execute live Codex tactics
+- keep live experiments under `LLMleanTest/Manual` (implemented for current smokes)
+- document that default builds should not execute live Codex tactics (implemented)
 - clearer errors for "Codex busy", timeout, process exit, and required input
-- optional idle timeout or manual restart command
+- reader/queue transport so turn timeouts can interrupt silent app-server sessions reliably
+  (implemented and covered by `Manual/CodexPersistentTimeoutSmoke.lean`)
+- optional idle timeout
 - stable verbose logs for Infoview and CLI builds
 
 ### Phase 3: Tactic-Native Dynamic Tool
@@ -513,24 +535,17 @@ Deliverables:
 
 ## Open Questions
 
-- Should the default persistent session be enabled immediately, or guarded by
-  `llmlean.codexPersistent` during stabilization?
 - Should a session be per project cwd or per Lean file? Project cwd is simpler and closer to
   app-server's thread model.
 - Should `llmstep` and `llmqed` share the same thread? Sharing improves context reuse; separate
   threads may avoid confusing proof-completion and next-tactic prompts.
-- What Lean locking primitive should be used for portable serialized access?
 - Should an idle timeout kill app-server after several minutes, or should it live until the Lean
   process exits?
-- How should users manually restart the session from Lean/Infoview if Codex state becomes stale?
 
 ## Recommendation
 
-Implement Phase 1 next.
+Finish the remaining Phase 2 editor controls, then proceed to Phase 3.
 
-Do not start Codex at `import LLMlean`. Start it lazily on the first explicit Codex-backed
-`llmstep` or `llmqed`, keep the process and thread alive for subsequent suggestions in the same
-Lean process, and verify the behavior with a fake app-server test before adding dynamic Lean tools.
-
-That is the smallest change that aligns LLMLean with the official app-server lifecycle and
-Symphony's successful app-server usage pattern.
+The lifecycle is now aligned with the official app-server model and Symphony's successful usage
+pattern. The next engineering work should add explicit busy/idle behavior and then the
+tactic-native `lean_validate` dynamic tool.

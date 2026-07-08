@@ -1,0 +1,58 @@
+import LLMlean.API.Codex.Session
+
+def tracePath : System.FilePath :=
+  "/tmp/llmlean-codex-persistent-session-smoke.jsonl"
+
+def fakeCommand : String :=
+  s!"python3 Manual/fake_codex_app_server.py {tracePath}"
+
+def containsSubstring (text : String) (needle : String) : Bool :=
+  (text.splitOn needle).length > 1
+
+def countContaining (needle : String) (lines : List String) : Nat :=
+  (lines.filter fun line => containsSubstring line needle).length
+
+def assertNatEq (label : String) (expected actual : Nat) : IO Unit := do
+  unless expected == actual do
+    throw <| IO.userError s!"{label}: expected {expected}, got {actual}"
+
+def assertStringEq (label expected actual : String) : IO Unit := do
+  unless expected == actual do
+    throw <| IO.userError s!"{label}: expected {expected}, got {actual}"
+
+#eval do
+  try
+    IO.FS.removeFile tracePath
+  catch _ =>
+    pure ()
+
+  let cwd ← IO.currentDir
+  let options : LLMlean.Codex.Session.Options := {
+    cwd := cwd,
+    debug := true,
+    readTimeoutMs := 5000,
+    turnTimeoutMs := 5000,
+    approvalPolicy := some ("never" : Lean.Json),
+    threadSandbox := some ("read-only" : Lean.Json),
+    turnSandboxPolicy := some <| Lean.Json.mkObj [
+      ("type", "readOnly"),
+      ("networkAccess", false)
+    ],
+    dynamicTools := some #[]
+  }
+
+  let first ← LLMlean.Codex.Session.runPrompt fakeCommand "first prompt" options
+  let second ← LLMlean.Codex.Session.runPrompt fakeCommand "second prompt" options
+  LLMlean.Codex.Session.stopCurrentSession
+
+  assertStringEq "first response" "response-1" first
+  assertStringEq "second response" "response-2" second
+
+  let trace ← IO.FS.readFile tracePath
+  let lines := (trace.splitOn "\n").filter fun (line : String) => line.trim.length > 0
+  assertNatEq "process starts" 1 (countContaining "START" lines)
+  assertNatEq "initialize requests" 1 (countContaining "\"method\":\"initialize\"" lines)
+  assertNatEq "thread/start requests" 1 (countContaining "\"method\":\"thread/start\"" lines)
+  assertNatEq "turn/start requests" 2 (countContaining "\"method\":\"turn/start\"" lines)
+
+  IO.println "persistent Codex session smoke passed"

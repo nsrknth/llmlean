@@ -1,5 +1,6 @@
 /- Process-backed JSONL client for Codex app-server. -/
 import Init.Task
+import Std.Sync.Channel
 import LLMlean.API.Codex.Protocol
 
 open Lean
@@ -8,12 +9,17 @@ namespace LLMlean.Codex.Client
 
 open LLMlean.Codex.Protocol
 
+inductive ReaderEvent where
+  | line (line : String)
+  | error (message : String)
+
 structure AppServer where
   child : IO.Process.Child {
     stdin := IO.Process.Stdio.piped,
     stdout := IO.Process.Stdio.piped,
     stderr := IO.Process.Stdio.piped
   }
+  stdoutEvents : Std.CloseableChannel.Sync ReaderEvent
 
 inductive TurnOutcome where
   | completed (message : Json) (finalText? : Option String)
@@ -33,8 +39,37 @@ def shellCommand (command : String) : String × Array String :=
   else
     ("bash", #["-lc", command])
 
+def sendReaderEvent
+    (events : Std.CloseableChannel.Sync ReaderEvent)
+    (event : ReaderEvent) : IO Bool := do
+  try
+    Std.CloseableChannel.Sync.send events event
+    return true
+  catch _ =>
+    return false
+
+def closeReaderEvents (events : Std.CloseableChannel.Sync ReaderEvent) : IO Unit := do
+  try
+    Std.CloseableChannel.Sync.close events
+  catch _ =>
+    pure ()
+
+partial def readStdoutLoop
+    (stdout : IO.FS.Handle)
+    (events : Std.CloseableChannel.Sync ReaderEvent) : IO Unit := do
+  try
+    let line ← stdout.getLine
+    if ← sendReaderEvent events (.line line) then
+      readStdoutLoop stdout events
+    else
+      pure ()
+  catch error =>
+    discard <| sendReaderEvent events (.error s!"{error}")
+    closeReaderEvents events
+
 def start (command : String) (cwd : Option System.FilePath := none) : IO AppServer := do
   let shell := shellCommand command
+  let stdoutEvents ← Std.CloseableChannel.Sync.new
   let child ← IO.Process.spawn {
     cmd := shell.1,
     args := shell.2,
@@ -44,14 +79,12 @@ def start (command : String) (cwd : Option System.FilePath := none) : IO AppServ
     stderr := IO.Process.Stdio.piped,
     setsid := true
   }
-  return { child := child }
+  discard <| IO.asTask (readStdoutLoop child.stdout stdoutEvents) Task.Priority.dedicated
+  return { child := child, stdoutEvents := stdoutEvents }
 
 def AppServer.send (server : AppServer) (message : Json) : IO Unit := do
   server.child.stdin.putStr (message.compress.push '\n')
   server.child.stdin.flush
-
-def readLineBlocking (server : AppServer) : IO String :=
-  server.child.stdout.getLine
 
 def AppServer.readStderrBestEffort (server : AppServer) : IO String := do
   try
@@ -80,20 +113,53 @@ def AppServer.exitedError? (server : AppServer) : IO (Option String) := do
         s!": {stderr}"
     return some s!"Codex app-server exited before it produced a JSON response ({error}){detail}"
 
+def stdoutClosedMessage : String :=
+  "Codex app-server stdout closed before it produced a JSON response"
+
+def AppServer.readerEventAsLine (server : AppServer) (event : ReaderEvent) : IO String := do
+  match event with
+  | .line line => return line
+  | .error message =>
+      match ← server.exitedError? with
+      | some message => throw <| IO.userError message
+      | none => throw <| IO.userError s!"Codex app-server stdout reader failed: {message}"
+
+def AppServer.readLineBlocking (server : AppServer) : IO String := do
+  match ← Std.CloseableChannel.Sync.recv server.stdoutEvents with
+  | some event => server.readerEventAsLine event
+  | none =>
+      match ← server.exitedError? with
+      | some message => throw <| IO.userError message
+      | none => throw <| IO.userError stdoutClosedMessage
+
+partial def readLinePollLoop
+    (server : AppServer)
+    (deadlineMs : Nat)
+    (sleepMs : UInt32 := 10) : IO (Option String) := do
+  match ← Std.CloseableChannel.Sync.tryRecv server.stdoutEvents with
+  | some event => some <$> server.readerEventAsLine event
+  | none =>
+      match ← server.exitedError? with
+      | some message => throw <| IO.userError message
+      | none =>
+          let now ← IO.monoMsNow
+          if now >= deadlineMs then
+            return none
+          else
+            IO.sleep sleepMs
+            readLinePollLoop server deadlineMs sleepMs
+
 def readLineWithTimeout (server : AppServer) (timeoutMs : Nat) : IO (Option String) := do
-  let _ := timeoutMs
-  try
-    return some (← readLineBlocking server)
-  catch error =>
-    match ← server.exitedError? with
-    | some message => throw <| IO.userError message
-    | none => throw error
+  if timeoutMs == 0 then
+    some <$> server.readLineBlocking
+  else
+    readLinePollLoop server ((← IO.monoMsNow) + timeoutMs)
 
 def parseMessage (line : String) : Except String Json :=
   Json.parse line
 
 def AppServer.readMessage (server : AppServer) : IO Json := do
-  let line ← readLineBlocking server
+  let line ← server.readLineBlocking
   match parseMessage line with
   | .ok message => return message
   | .error error => throw <| IO.userError s!"Malformed Codex app-server JSONL frame: {error}"
@@ -298,6 +364,7 @@ def AppServer.terminate (server : AppServer) : IO Unit := do
     | none => server.child.kill
   catch _ =>
     pure ()
+  closeReaderEvents server.stdoutEvents
 
 def AppServer.wait (server : AppServer) : IO UInt32 :=
   server.child.wait
