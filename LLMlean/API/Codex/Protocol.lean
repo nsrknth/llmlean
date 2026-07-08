@@ -74,6 +74,15 @@ def initializeRequest (id : RequestId := 1) : Json :=
 def initializedNotification : Json :=
   notification "initialized"
 
+def modelListRequest
+    (id : RequestId := 2)
+    (limit : Option Nat := some 50)
+    (includeHidden : Bool := true) : Json :=
+  request id "model/list" <| jsonObj [
+    ("limit", limit.map fun value => (value : Json)),
+    ("includeHidden", some (includeHidden : Json))
+  ]
+
 def textInput (text : String) : Json :=
   Json.mkObj [
     ("type", "text"),
@@ -110,6 +119,7 @@ def turnStartRequest
     (approvalPolicy : Option Json := none)
     (sandboxPolicy : Option Json := none)
     (model : Option String := none)
+    (effort : Option String := none)
     (outputSchema : Option Json := none) : Json :=
   request id "turn/start" <| jsonObj [
     ("threadId", some (threadId : Json)),
@@ -119,6 +129,7 @@ def turnStartRequest
     ("approvalPolicy", approvalPolicy),
     ("sandboxPolicy", sandboxPolicy),
     ("model", model.map fun value => (value : Json)),
+    ("effort", effort.map fun value => (value : Json)),
     ("outputSchema", outputSchema)
   ]
 

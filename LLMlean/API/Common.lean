@@ -221,12 +221,20 @@ def printConfiguration (api : API) (tacticKind : TacticKind) (numSamples : Nat) 
     Config.verbosePrint s!"  Tactic: {repr tacticKind}"
     Config.verbosePrint s!"  API: {repr api.kind}"
     Config.verbosePrint s!"  Model: {api.model}"
-    Config.verbosePrint s!"  Endpoint: {api.baseUrl}"
+    match api.kind with
+    | APIKind.Codex =>
+        Config.verbosePrint s!"  Reasoning Effort: {(← Config.getCodexEffort).getD "(default)"}"
+    | _ =>
+        Config.verbosePrint s!"  Endpoint: {api.baseUrl}"
     Config.verbosePrint s!"  Prompt Kind: {repr api.promptKind}"
     Config.verbosePrint s!"  Response Format: {repr api.responseFormat}"
     Config.verbosePrint s!"  Mode: {repr mode}"
     Config.verbosePrint s!"  Number of Samples: {numSamples}"
-    Config.verbosePrint s!"  Max Tokens: {maxTokens}"
+    match api.kind with
+    | APIKind.Codex =>
+        Config.verbosePrint "  Max Tokens: Codex app-server controlled"
+    | _ =>
+        Config.verbosePrint s!"  Max Tokens: {maxTokens}"
 
 def getChatGenerationOptions (api : API) (tacticKind : TacticKind): CoreM ChatGenerationOptions := do
   let numSamples ← getNumSamples api tacticKind

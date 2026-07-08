@@ -77,6 +77,11 @@ register_option llmlean.codexCommand : String := {
   descr := s!"If set, command used to start Codex app-server (default: {defaultCodexCommand})"
 }
 
+register_option llmlean.codexEffort : String := {
+  defValue := "",
+  descr := "If set, Codex app-server reasoning effort for turn/start (for example: low, medium, high, xhigh)"
+}
+
 register_option llmlean.codexReadTimeoutMs : Nat := {
   defValue := 0,
   descr := s!"If nonzero, app-server request timeout in milliseconds (default: {defaultCodexReadTimeoutMs})"
@@ -85,11 +90,6 @@ register_option llmlean.codexReadTimeoutMs : Nat := {
 register_option llmlean.codexTurnTimeoutMs : Nat := {
   defValue := 0,
   descr := s!"If nonzero, Codex app-server turn timeout in milliseconds (default: {defaultCodexTurnTimeoutMs})"
-}
-
-register_option llmlean.codexCache : Bool := {
-  defValue := true,
-  descr := "Cache Codex app-server responses for identical prompts within the current Lean process"
 }
 
 register_option llmlean.codexPersistent : Bool := {
@@ -252,6 +252,14 @@ def getCodexCommand : CoreM String := do
     | some command => return command
   | command => return command
 
+def getCodexEffort : CoreM (Option String) := do
+  match llmlean.codexEffort.get (← getOptions) with
+  | "" =>
+    match ← IO.getEnv "LLMLEAN_CODEX_EFFORT" with
+    | none => getFromConfigFile `codexEffort
+    | some effort => return some effort
+  | effort => return some effort
+
 def getCodexReadTimeoutMs : CoreM Nat := do
   match llmlean.codexReadTimeoutMs.get (← getOptions) with
   | 0 =>
@@ -285,9 +293,6 @@ def getCodexTurnTimeoutMs : CoreM Nat := do
         | none => return defaultCodexTurnTimeoutMs
       | none => return defaultCodexTurnTimeoutMs
   | timeout => return timeout
-
-def getCodexCache : CoreM Bool := do
-  return llmlean.codexCache.get (← getOptions)
 
 def getCodexPersistent : CoreM Bool := do
   if !llmlean.codexPersistent.get (← getOptions) then
@@ -485,7 +490,7 @@ def getDefaultsForAPI (apiKind : APIKind) (tactic : TacticKind) : APIDefaults :=
       promptKind := PromptKind.Reasoning
       responseFormat := ResponseFormat.Markdown
       numSamples := 3
-      maxTokens := 512
+      maxTokens := 0
       endpoint := ""
     }
   | APIKind.Codex, TacticKind.LLMQed => {
@@ -494,7 +499,7 @@ def getDefaultsForAPI (apiKind : APIKind) (tactic : TacticKind) : APIDefaults :=
       promptKind := PromptKind.Reasoning
       responseFormat := ResponseFormat.Markdown
       numSamples := 1
-      maxTokens := 2048
+      maxTokens := 0
       endpoint := ""
     }
 

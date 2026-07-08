@@ -1,6 +1,7 @@
 /- Persistent Codex app-server session manager. -/
 import Std.Sync.Mutex
 import Lean.Elab.Command
+import LLMlean.Config
 import LLMlean.API.Codex.Client
 
 open Lean
@@ -13,6 +14,7 @@ structure SessionKey where
   command : String
   cwd : String
   model : Option String
+  effort : Option String
   approvalPolicyKey : String
   threadSandboxKey : String
   turnSandboxPolicyKey : String
@@ -23,6 +25,7 @@ structure Options where
   cwd : System.FilePath
   title : Option String := none
   model : Option String := none
+  effort : Option String := none
   debug : Bool := false
   readTimeoutMs : Nat
   turnTimeoutMs : Nat
@@ -30,6 +33,7 @@ structure Options where
   threadSandbox : Option Json := none
   turnSandboxPolicy : Option Json := none
   dynamicTools : Option (Array Json) := some #[]
+  dynamicToolHandler? : Option DynamicToolHandler := none
 
 structure LiveSession where
   key : SessionKey
@@ -61,6 +65,7 @@ def sessionKey (command : String) (options : Options) : SessionKey :=
     command := command,
     cwd := cwdString,
     model := options.model,
+    effort := options.effort,
     approvalPolicyKey := jsonOptionKey options.approvalPolicy,
     threadSandboxKey := jsonOptionKey options.threadSandbox,
     turnSandboxPolicyKey := jsonOptionKey options.turnSandboxPolicy,
@@ -78,6 +83,20 @@ def turnOutcomeError : TurnOutcome → String
 def busyError : String :=
   "Codex app-server session is already running a turn; wait for it to finish or use " ++
     "#llmlean_codex_reset if it is stale"
+
+def wrapDynamicToolHandler (options : Options) : Option DynamicToolHandler :=
+  options.dynamicToolHandler?.map fun dynamicToolHandler =>
+    fun name arguments => do
+      debugPrint options s!"dynamic tool requested: {name}"
+      let result ← dynamicToolHandler name arguments
+      match result with
+      | .ok output =>
+          debugPrint options
+            s!"dynamic tool completed: {name}, outputLength={output.length}"
+      | .error output =>
+          debugPrint options
+            s!"dynamic tool failed: {name}, outputLength={output.length}"
+      return result
 
 def startSession (command : String) (options : Options) (key : SessionKey) : IO LiveSession := do
   let startedAt ← IO.monoMsNow
@@ -142,9 +161,11 @@ def runTurn (session : LiveSession) (prompt : String) (options : Options) :
     (approvalPolicy := options.approvalPolicy)
     (sandboxPolicy := options.turnSandboxPolicy)
     (model := options.model)
+    (effort := options.effort)
   debugPrint options
     s!"persistent turn/start id={requestId} returned in {(← IO.monoMsNow) - startedAt}ms"
-  match ← session.server.awaitTurn options.turnTimeoutMs with
+  match ← session.server.awaitTurn options.turnTimeoutMs
+      (dynamicToolHandler? := wrapDynamicToolHandler options) with
   | .completed _ (some text) =>
       let now ← IO.monoMsNow
       debugPrint options s!"persistent turn completed in {now - startedAt}ms"
@@ -181,9 +202,22 @@ def currentSessionSummary : IO String := do
   sessionMutex.atomically fun ref => do
     match ← ref.get with
     | some session =>
-        return s!"active thread={session.threadId}, cwd={session.key.cwd}, command={session.key.command}, nextRequestId={session.nextRequestId}"
+        return s!"active thread={session.threadId}, cwd={session.key.cwd}, " ++
+          s!"model={session.key.model.getD "(default)"}, " ++
+          s!"effort={session.key.effort.getD "(default)"}, " ++
+          s!"command={session.key.command}, nextRequestId={session.nextRequestId}"
     | none =>
         return "no active Codex app-server session"
+
+def listModelsRaw
+    (command : String)
+    (readTimeoutMs : Nat)
+    (cwd : System.FilePath)
+    (includeHidden : Bool := true) : IO String := do
+  withAppServer command (some cwd) fun server => do
+    server.initialize readTimeoutMs
+    let result ← server.listModels readTimeoutMs (includeHidden := includeHidden)
+    return result.compress
 
 end LLMlean.Codex.Session
 
@@ -191,6 +225,7 @@ open Lean Elab Command
 
 syntax "#llmlean_codex_status" : command
 syntax "#llmlean_codex_reset" : command
+syntax "#llmlean_codex_models" : command
 
 elab "#llmlean_codex_status" : command => do
   logInfo (← liftIO LLMlean.Codex.Session.currentSessionSummary)
@@ -198,3 +233,10 @@ elab "#llmlean_codex_status" : command => do
 elab "#llmlean_codex_reset" : command => do
   liftIO LLMlean.Codex.Session.stopCurrentSession
   logInfo "stopped current Codex app-server session"
+
+elab "#llmlean_codex_models" : command => do
+  let command ← liftCoreM LLMlean.Config.getCodexCommand
+  let readTimeoutMs ← liftCoreM LLMlean.Config.getCodexReadTimeoutMs
+  let cwd ← liftIO IO.currentDir
+  logInfo (← liftIO <|
+    LLMlean.Codex.Session.listModelsRaw command readTimeoutMs cwd (includeHidden := true))

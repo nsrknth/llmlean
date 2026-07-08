@@ -18,6 +18,12 @@ poll a closeable in-memory queue with a deadline, so a silent app-server turn ca
 `llmlean.codexTurnTimeoutMs`; the persistent session is terminated and cleared after that turn
 failure.
 
+Model selection and reasoning effort are app-server protocol concerns, not only launch-command
+concerns. The app-server docs expose `model/list` for model capabilities, `thread/start.model`, and
+`turn/start.model` plus `turn/start.effort`. LLMLean should therefore pass the requested model and
+reasoning effort as JSON-RPC fields and use `model/list` as the discovery/debug surface for
+supported efforts.
+
 ## Current Conclusion
 
 Use Codex app-server as a session protocol, not as a per-request completion API.
@@ -32,7 +38,7 @@ Codex app-server backend:
   connection -> initialize -> thread -> turn -> event stream -> optional client tools -> completion
 ```
 
-The initial LLMLean spike behaved like the first shape on every cache miss:
+The initial LLMLean spike behaved like the first shape for each request:
 
 ```text
 llmstep / llmqed
@@ -156,7 +162,7 @@ The LLMLean equivalent should be smaller, but the shape is the same:
 
 ```text
 session manager:
-  owns process, connection, thread id, request ids, policy, cwd, model
+  owns process, connection, thread id, request ids, policy, cwd, model, effort
 
 suggestion request:
   sends one turn/start on the existing thread
@@ -223,6 +229,7 @@ A live session is compatible only when the important configuration matches:
 - app-server command
 - project cwd
 - model
+- reasoning effort
 - approval policy
 - thread sandbox
 - turn sandbox policy shape
@@ -247,6 +254,7 @@ structure SessionKey where
   command : String
   cwd : String
   model : Option String
+  effort : Option String
   approvalPolicyKey : String
   threadSandboxKey : String
   turnSandboxPolicyKey : String
@@ -273,7 +281,8 @@ Possible user-facing options:
 
 ```lean
 set_option llmlean.codexPersistent true
-set_option llmlean.codexCache true
+set_option llmlean.model "gpt-5.5"
+set_option llmlean.codexEffort "xhigh"
 set_option llmlean.codexTurnTimeoutMs 180000
 ```
 
@@ -314,6 +323,8 @@ turn/start:
   threadId = stored thread id
   cwd = current project cwd
   input = current goal/context prompt
+  model = configured Codex model, if any
+  effort = configured Codex reasoning effort, if any
   title = optional short file/line/goal title
   approvalPolicy = conservative policy
   sandboxPolicy = read-only by default
@@ -332,7 +343,8 @@ While waiting, it should handle:
 
 - `item/agentMessage/delta`: accumulate text and optionally verbose-log progress
 - `thread/tokenUsage/updated`: verbose-log token accounting
-- unsupported `item/tool/call`: return a clear failure result and keep reading
+- `item/tool/call`: dispatch to the registered dynamic-tool handler or return a clear unsupported
+  tool failure result, then keep reading
 - command/file approval requests: decline or fail according to policy
 - malformed non-protocol lines: verbose-log, do not crash unless they block protocol progress
 
@@ -370,7 +382,9 @@ proof certificate.
 ## Dynamic Lean Tooling
 
 The truly app-server-native design is still to expose Lean validation as a client-side Codex tool.
-That should come after the lifecycle is fixed.
+The stream-level foundation for this now exists: app-server `item/tool/call` messages are handled
+inside the turn loop and can call a per-turn Lean handler. The remaining work is making that handler
+run in the live `TacticM` context instead of an `IO` callback.
 
 Initial tool:
 
@@ -435,7 +449,7 @@ Codex version, account/model availability, and network state.
 
 Verbose mode should make the latency and extraction pipeline visible:
 
-- cache hit or miss
+- selected model and reasoning effort
 - whether persistent session was reused or started
 - startup, initialize, thread/start, turn/start, and turn completion timings
 - raw app-server errors
@@ -465,7 +479,6 @@ Implemented pieces:
 - process-backed JSONL client
 - single-turn completion wrapper
 - Codex path wired into `llmstep` and `llmqed`
-- response cache for identical prompts in the current Lean process
 - multi-candidate tactic parsing
 - verbose extraction and validation logs
 
@@ -481,8 +494,10 @@ Deliverables:
 - process/thread reuse across multiple Codex turns in one Lean process
 - serialized access to a live session using `Std.Mutex`
 - compatibility key for command/cwd/model/policy/tool set
+- compatibility key includes reasoning effort because `turn/start.effort` becomes a thread default
 - explicit cleanup path via `LLMlean.Codex.Session.stopCurrentSession`
 - user-facing `#llmlean_codex_status` and `#llmlean_codex_reset` commands
+- user-facing `#llmlean_codex_models` command for raw app-server model catalog inspection
 - `llmlean.codexPersistent` toggle, enabled by default
 - verbose logs showing reuse vs startup
 - fake app-server regression smoke:
@@ -516,6 +531,8 @@ Deliverables:
 
 ### Phase 3: Tactic-Native Dynamic Tool
 
+Status: stream-level dynamic tool support implemented; tactic-native validation still pending.
+
 Deliverables:
 
 - `lean_validate` dynamic tool
@@ -523,6 +540,15 @@ Deliverables:
 - `llmqed` TacticM-native Codex path
 - Codex can test candidates during the turn
 - final suggestions still revalidated by LLMLean
+
+Implemented foundation:
+
+- thread/start can advertise `dynamicTools`
+- `item/tool/call` is dispatched during the app-server turn stream
+- tool success/failure responses use the app-server dynamic tool result shape
+- verbose logs include dynamic tool request/completion/failure events
+- `Manual/CodexDynamicToolSmoke.lean` verifies a fake app-server can call a Lean-registered tool
+  and complete the turn with the tool result
 
 This is where app-server becomes meaningfully better than a completion backend.
 

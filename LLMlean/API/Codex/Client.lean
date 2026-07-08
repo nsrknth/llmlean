@@ -9,6 +9,8 @@ namespace LLMlean.Codex.Client
 
 open LLMlean.Codex.Protocol
 
+abbrev DynamicToolHandler := String → Json → IO (Except String String)
+
 inductive ReaderEvent where
   | line (line : String)
   | error (message : String)
@@ -228,6 +230,15 @@ def AppServer.initialize
   discard <| server.awaitResponse requestId timeoutMs
   server.send initializedNotification
 
+def AppServer.listModels
+    (server : AppServer)
+    (timeoutMs : Nat)
+    (requestId : RequestId := 2)
+    (limit : Option Nat := some 50)
+    (includeHidden : Bool := true) : IO Json := do
+  server.send <| modelListRequest requestId limit includeHidden
+  server.awaitResponse requestId timeoutMs
+
 def AppServer.startThread
     (server : AppServer)
     (timeoutMs : Nat)
@@ -254,9 +265,10 @@ def AppServer.startTurn
     (approvalPolicy : Option Json := none)
     (sandboxPolicy : Option Json := none)
     (model : Option String := none)
+    (effort : Option String := none)
     (outputSchema : Option Json := none) : IO String := do
   server.send <| turnStartRequest
-    requestId threadId prompt cwd title approvalPolicy sandboxPolicy model outputSchema
+    requestId threadId prompt cwd title approvalPolicy sandboxPolicy model effort outputSchema
   let result ← server.awaitResponse requestId timeoutMs
   match turnIdFromResult? result with
   | some turnId => return turnId
@@ -281,13 +293,25 @@ def unsupportedToolMessage (toolName : Option String) : String :=
   | some name => s!"Unsupported dynamic tool: \"{name}\"."
   | none => "Unsupported dynamic tool call."
 
-def AppServer.maybeRejectUnsupportedToolCall (server : AppServer) (message : Json) : IO Bool := do
+def AppServer.maybeHandleDynamicToolCall
+    (server : AppServer)
+    (message : Json)
+    (dynamicToolHandler? : Option DynamicToolHandler) : IO Bool := do
   if hasMethod message "item/tool/call" then
     match id? message with
     | some requestId =>
         let params := (params? message).getD emptyParams
         let toolName := toolCallName? params
-        server.send (dynamicToolFailure requestId (unsupportedToolMessage toolName))
+        let arguments := toolCallArguments params
+        match toolName, dynamicToolHandler? with
+        | some name, some dynamicToolHandler =>
+            match ← dynamicToolHandler name arguments with
+            | .ok output =>
+                server.send (dynamicToolSuccess requestId output)
+            | .error output =>
+                server.send (dynamicToolFailure requestId output)
+        | _, _ =>
+            server.send (dynamicToolFailure requestId (unsupportedToolMessage toolName))
         return true
     | none => return false
   else
@@ -312,6 +336,7 @@ partial def awaitTurnLoop
     (timeoutMs : Nat)
     (startedAt : Nat)
     (autoApprove : Bool)
+    (dynamicToolHandler? : Option DynamicToolHandler)
     (accumulated : String) : IO TurnOutcome := do
   let readTimeout ←
     if timeoutMs == 0 then
@@ -331,27 +356,28 @@ partial def awaitTurnLoop
     return TurnOutcome.failed message
   else if turnCancelled? message then
     return TurnOutcome.cancelled message
-  else if ← server.maybeRejectUnsupportedToolCall message then
-    awaitTurnLoop server timeoutMs startedAt autoApprove accumulated
+  else if ← server.maybeHandleDynamicToolCall message dynamicToolHandler? then
+    awaitTurnLoop server timeoutMs startedAt autoApprove dynamicToolHandler? accumulated
   else
     match approvalResponseFor? message with
     | some response =>
         if autoApprove then
           server.send response
-          awaitTurnLoop server timeoutMs startedAt autoApprove accumulated
+          awaitTurnLoop server timeoutMs startedAt autoApprove dynamicToolHandler? accumulated
         else
           return TurnOutcome.inputRequired message
     | none =>
         if needsInput? message then
           return TurnOutcome.inputRequired message
         else
-          awaitTurnLoop server timeoutMs startedAt autoApprove accumulated
+          awaitTurnLoop server timeoutMs startedAt autoApprove dynamicToolHandler? accumulated
 
 def AppServer.awaitTurn
     (server : AppServer)
     (timeoutMs : Nat)
-    (autoApprove : Bool := false) : IO TurnOutcome := do
-  awaitTurnLoop server timeoutMs (← IO.monoMsNow) autoApprove ""
+    (autoApprove : Bool := false)
+    (dynamicToolHandler? : Option DynamicToolHandler := none) : IO TurnOutcome := do
+  awaitTurnLoop server timeoutMs (← IO.monoMsNow) autoApprove dynamicToolHandler? ""
 
 def TurnOutcome.finalText? : TurnOutcome → Option String
   | .completed _ text => text

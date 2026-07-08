@@ -48,6 +48,13 @@ Configuration variables:
   - `codex`: select the Codex app-server backend
 - `codexCommand`:
   - Command used to start app-server, defaulting to `codex app-server`
+- `model`:
+  - Optional Codex model id. When set, LLMLean sends it through app-server `thread/start` and
+    `turn/start`; it does not need to be embedded in `codexCommand`.
+- `codexEffort`:
+  - Optional Codex reasoning effort for app-server `turn/start` (for example `low`, `medium`,
+    `high`, or `xhigh`). Supported values are model-dependent; use `#llmlean_codex_models` to see
+    the current app-server model catalog and effort metadata.
 - `codexReadTimeoutMs`:
   - Timeout for app-server request/response handshakes, defaulting to `5000`
 - `codexTurnTimeoutMs`:
@@ -61,6 +68,8 @@ Environment variables:
 
 ```bash
 export LLMLEAN_API=codex
+export LLMLEAN_MODEL=gpt-5.5
+export LLMLEAN_CODEX_EFFORT=xhigh
 export LLMLEAN_CODEX_COMMAND='codex app-server'
 export LLMLEAN_CODEX_READ_TIMEOUT_MS=5000
 export LLMLEAN_CODEX_TURN_TIMEOUT_MS=120000
@@ -70,6 +79,10 @@ export LLMLEAN_CODEX_PERSISTENT=true
 Lean commands:
 
 ```lean
+set_option llmlean.model "gpt-5.5"
+set_option llmlean.codexEffort "xhigh"
+
+#llmlean_codex_models
 #llmlean_codex_status
 #llmlean_codex_reset
 ```
@@ -82,7 +95,8 @@ request fails fast with a "session is already running a turn" error instead of w
 
 With `llmlean.verbose = true`, the Codex path logs whether the session was started or reused,
 request timings, raw response text, parsed suggestion counts, validation results, and displayed
-suggestion counts.
+suggestion counts. If dynamic tools are enabled by the caller, verbose logs also show tool
+request/completion/failure events.
 
 #### LLM on your laptop
 - `api`:

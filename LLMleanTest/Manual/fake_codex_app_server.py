@@ -38,6 +38,28 @@ def main():
                 send({"id": request_id, "result": {}})
             elif method == "initialized":
                 continue
+            elif method == "model/list":
+                send({
+                    "id": request_id,
+                    "result": {
+                        "data": [{
+                            "id": "gpt-5.5",
+                            "model": "gpt-5.5",
+                            "displayName": "GPT-5.5",
+                            "hidden": False,
+                            "defaultReasoningEffort": "medium",
+                            "supportedReasoningEfforts": [
+                                {"reasoningEffort": "low", "description": "Lower latency"},
+                                {"reasoningEffort": "medium", "description": "Balanced"},
+                                {"reasoningEffort": "xhigh", "description": "Deep reasoning"},
+                            ],
+                            "inputModalities": ["text", "image"],
+                            "supportsPersonality": True,
+                            "isDefault": True,
+                        }],
+                        "nextCursor": None,
+                    },
+                })
             elif method == "thread/start":
                 send({"id": request_id, "result": {"thread": {"id": "thread-1"}}})
             elif method == "turn/start":

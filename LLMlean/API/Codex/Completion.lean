@@ -9,10 +9,6 @@ namespace LLMlean.Codex.Completion
 
 open LLMlean.Codex.Client
 
-initialize promptCache : IO.Ref (List (String × String)) ← IO.mkRef []
-
-def maxPromptCacheEntries : Nat := 64
-
 def defaultApprovalPolicy : Json :=
   ("never" : Json)
 
@@ -26,6 +22,7 @@ structure Options where
   cwd : Option System.FilePath := none
   title : Option String := none
   model : Option String := none
+  effort : Option String := none
   debug : Bool := false
   readTimeoutMs : Nat := LLMlean.Config.defaultCodexReadTimeoutMs
   turnTimeoutMs : Nat := LLMlean.Config.defaultCodexTurnTimeoutMs
@@ -33,6 +30,7 @@ structure Options where
   threadSandbox : Option Json := some ("read-only" : Json)
   turnSandboxPolicy : Option Json := some readOnlyTurnSandboxPolicy
   dynamicTools : Option (Array Json) := some #[]
+  dynamicToolHandler? : Option DynamicToolHandler := none
   persistent : Bool := true
 
 def debugPrint (options : Options) (message : String) : IO Unit := do
@@ -46,32 +44,6 @@ def resolveCwd (options : Options) : IO System.FilePath := do
   | some cwd => return cwd
   | none => IO.currentDir
 
-def jsonOptionKey : Option Json → String
-  | some json => json.compress
-  | none => ""
-
-def promptCacheKey (command : String) (prompt : String) (options : Options)
-    (cwdString : String) : String :=
-  s!"command={command}
-cwd={cwdString}
-model={options.model.getD ""}
-approvalPolicy={jsonOptionKey options.approvalPolicy}
-threadSandbox={jsonOptionKey options.threadSandbox}
-turnSandboxPolicy={jsonOptionKey options.turnSandboxPolicy}
-dynamicTools={match options.dynamicTools with | some tools => toJson tools |>.compress | none => ""}
-prompt={prompt}"
-
-def lookupPromptCache (key : String) : IO (Option String) := do
-  let entries ← promptCache.get
-  match entries.find? fun entry => entry.1 == key with
-  | some entry => return some entry.2
-  | none => return none
-
-def storePromptCache (key : String) (value : String) : IO Unit := do
-  let entries ← promptCache.get
-  let entries := (key, value) :: entries.filter (fun entry => entry.1 != key)
-  promptCache.set (entries.take maxPromptCacheEntries)
-
 def turnOutcomeError : TurnOutcome → String
   | .completed _ none => "Codex app-server completed the turn without final text"
   | .completed _ (some _) => "Codex app-server completed unexpectedly"
@@ -80,18 +52,34 @@ def turnOutcomeError : TurnOutcome → String
   | .inputRequired _ => "Codex app-server turn requires input or approval"
   | .timedOut => "Codex app-server turn timed out"
 
+def wrapDynamicToolHandler (options : Options) : Option DynamicToolHandler :=
+  options.dynamicToolHandler?.map fun dynamicToolHandler =>
+    fun name arguments => do
+      debugPrint options s!"dynamic tool requested: {name}"
+      let result ← dynamicToolHandler name arguments
+      match result with
+      | .ok output =>
+          debugPrint options
+            s!"dynamic tool completed: {name}, outputLength={output.length}"
+      | .error output =>
+          debugPrint options
+            s!"dynamic tool failed: {name}, outputLength={output.length}"
+      return result
+
 def toSessionOptions (options : Options) (cwd : System.FilePath) :
     LLMlean.Codex.Session.Options := {
   cwd := cwd,
   title := options.title,
   model := options.model,
+  effort := options.effort,
   debug := options.debug,
   readTimeoutMs := options.readTimeoutMs,
   turnTimeoutMs := options.turnTimeoutMs,
   approvalPolicy := options.approvalPolicy,
   threadSandbox := options.threadSandbox,
   turnSandboxPolicy := options.turnSandboxPolicy,
-  dynamicTools := options.dynamicTools
+  dynamicTools := options.dynamicTools,
+  dynamicToolHandler? := options.dynamicToolHandler?
 }
 
 def runPromptOneShot (command : String) (prompt : String) (options : Options := {}) : IO String := do
@@ -120,8 +108,10 @@ def runPromptOneShot (command : String) (prompt : String) (options : Options := 
       (approvalPolicy := options.approvalPolicy)
       (sandboxPolicy := options.turnSandboxPolicy)
       (model := options.model)
+      (effort := options.effort)
     debugPrint options s!"turn/start returned in {(← IO.monoMsNow) - startedAt}ms"
-    match ← server.awaitTurn options.turnTimeoutMs with
+    match ← server.awaitTurn options.turnTimeoutMs
+        (dynamicToolHandler? := wrapDynamicToolHandler options) with
     | .completed _ (some text) =>
         debugPrint options s!"turn completed in {(← IO.monoMsNow) - startedAt}ms"
         return text
@@ -134,19 +124,6 @@ def runPrompt (command : String) (prompt : String) (options : Options := {}) : I
   else
     runPromptOneShot command prompt { options with cwd := some cwd }
 
-def runPromptCached (command : String) (prompt : String) (options : Options := {}) : IO String := do
-  let cwd ← resolveCwd options
-  let key := promptCacheKey command prompt options cwd.toString
-  match ← lookupPromptCache key with
-  | some response =>
-      debugPrint options "cache hit"
-      return response
-  | none =>
-      debugPrint options "cache miss"
-      let response ← runPrompt command prompt { options with cwd := some cwd }
-      storePromptCache key response
-      return response
-
 def firstSome (left : Option α) (right : Option α) : Option α :=
   match left with
   | some value => some value
@@ -157,17 +134,18 @@ def runConfiguredPrompt (prompt : String) (model : Option String := none) : Core
   let readTimeoutMs ← LLMlean.Config.getCodexReadTimeoutMs
   let turnTimeoutMs ← LLMlean.Config.getCodexTurnTimeoutMs
   let configuredModel ← LLMlean.Config.getModel
+  let effort ← LLMlean.Config.getCodexEffort
   let persistent ← LLMlean.Config.getCodexPersistent
   let options : Options := {
     model := firstSome model configuredModel,
+    effort := effort,
     debug := (← LLMlean.Config.getVerbose),
     readTimeoutMs := readTimeoutMs,
     turnTimeoutMs := turnTimeoutMs,
     persistent := persistent
   }
-  if ← LLMlean.Config.getCodexCache then
-    runPromptCached command prompt options
-  else
-    runPrompt command prompt options
+  debugPrint options
+    s!"turn config: model={options.model.getD "(default)"}, effort={options.effort.getD "(default)"}"
+  runPrompt command prompt options
 
 end LLMlean.Codex.Completion
