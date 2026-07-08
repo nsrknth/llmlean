@@ -155,6 +155,9 @@ def tacticGenerationCodex (pfx : String) (prompts : List String)
   let some prompt := prompts.head?
     | return #[]
   Config.verbosePrint s!"Codex llmstep requested up to {options.numSamples} tactic(s)"
+  if options.numSamples > 1 then
+    Config.verbosePrint
+      s!"Codex llmstep currently uses one app-server turn; numSamples={options.numSamples} is a prompt-level request for multiple [TAC] blocks, not {options.numSamples} independent Codex samples"
   let prompt := codexMultiTacticPrompt prompt options.numSamples
   Config.verbosePrint s!"Codex prompt length: {prompt.length} characters"
   let response ← LLMlean.Codex.Completion.runConfiguredPrompt prompt (codexTacticModel? api)
@@ -164,11 +167,23 @@ def tacticGenerationCodex (pfx : String) (prompts : List String)
   for tactic in parsedTactics do
     Config.verbosePrint s!"Parsed tactic:\n{tactic}"
   let mut results : Std.HashSet String := Std.HashSet.emptyWithCapacity
+  let mut acceptedBeforeDedupe := 0
+  let mut rejectedByBannedToken := 0
   for tactic in parsedTactics do
     let tactic := pfx ++ tactic
     if filterGeneration tactic then
+      acceptedBeforeDedupe := acceptedBeforeDedupe + 1
       results := results.insert tactic
+    else
+      rejectedByBannedToken := rejectedByBannedToken + 1
+      Config.verbosePrint s!"Codex rejected tactic because it contains a banned token:\n{tactic}"
+  let duplicateCount := acceptedBeforeDedupe - results.size
   Config.verbosePrint s!"Codex kept {results.size} tactic(s) after filtering"
+  Config.verbosePrint
+    s!"Codex llmstep generation summary: requested={options.numSamples}, appServerTurns=1, parsed={parsedTactics.size}, bannedFiltered={rejectedByBannedToken}, deduped={duplicateCount}, returned={results.size}"
+  if options.numSamples > 1 && results.size < options.numSamples then
+    Config.verbosePrint
+      s!"Codex returned fewer tactics than requested before Lean validation; current root cause is usually the single-turn prompt contract or candidate parsing/filtering, not the Infoview widget"
   return results.toArray.map fun tactic => (tactic, 1.0)
 
 /-!

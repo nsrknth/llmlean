@@ -67,7 +67,12 @@ def addSuggestions' (tacRef : Syntax) (suggestions: Array (String × Float))
         suggestions.mapM checkSuggestion'
       else
         pure <| suggestions.map fun _ => CheckResult.Unchecked
+    let mut invalidCount := 0
+    for check in checks do
+      if check == CheckResult.Invalid then
+        invalidCount := invalidCount + 1
     Config.verbosePrint s!"llmqed validation enabled: {validate}"
+    Config.verbosePrint s!"llmqed received {suggestions.size} suggestion(s) before validation"
     for suggestionAndCheck in suggestions.zip checks do
       Config.verbosePrint
         s!"llmqed suggestion ({repr suggestionAndCheck.2}):\n{suggestionAndCheck.1}"
@@ -82,6 +87,8 @@ def addSuggestions' (tacRef : Syntax) (suggestions: Array (String × Float))
         | CheckResult.Unchecked => true
         | CheckResult.Invalid => false
     Config.verbosePrint s!"llmqed displaying {textsAndChecks.size} suggestion(s)"
+    Config.verbosePrint
+      s!"llmqed display summary: received={suggestions.size}, invalidFiltered={invalidCount}, displayed={textsAndChecks.size}"
     for suggestionAndCheck in textsAndChecks do
       Config.verbosePrint
         s!"llmqed displayed ({repr suggestionAndCheck.2}):\n{suggestionAndCheck.1}"

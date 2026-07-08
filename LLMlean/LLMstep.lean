@@ -116,7 +116,12 @@ def addSuggestions (tacRef : Syntax) (pfxRef: Syntax) (suggestions: Array (Strin
           suggestions.mapM checkSuggestion
         else
           pure <| suggestions.map fun _ => CheckResult.Unchecked
+      let mut invalidCount := 0
+      for check in checks do
+        if check == CheckResult.Invalid then
+          invalidCount := invalidCount + 1
       Config.verbosePrint s!"llmstep validation enabled: {validate}"
+      Config.verbosePrint s!"llmstep received {suggestions.size} suggestion(s) before validation"
       for suggestionAndCheck in suggestions.zip checks do
         Config.verbosePrint
           s!"llmstep suggestion ({repr suggestionAndCheck.2}):\n{suggestionAndCheck.1}"
@@ -134,6 +139,8 @@ def addSuggestions (tacRef : Syntax) (pfxRef: Syntax) (suggestions: Array (Strin
           | CheckResult.Unchecked => true
           | CheckResult.Invalid => false
       Config.verbosePrint s!"llmstep displaying {textsAndChecks.size} suggestion(s)"
+      Config.verbosePrint
+        s!"llmstep display summary: received={suggestions.size}, invalidFiltered={invalidCount}, displayed={textsAndChecks.size}"
       for suggestionAndCheck in textsAndChecks do
         Config.verbosePrint
           s!"llmstep displayed ({repr suggestionAndCheck.2}):\n{suggestionAndCheck.1}"

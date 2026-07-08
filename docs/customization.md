@@ -34,10 +34,12 @@ Set each variable in the configuration file, as indicated in [README](../README.
 
 **Note on Iterative Refinement**: This mode works particularly well with models that can understand and learn from error messages. We recommend using instruction-tuned models with the `reasoning` prompt type for best results.
 
-#### Codex app-server (planned)
+#### Codex app-server (experimental)
 
-The `codex` API kind is reserved for a native Codex app-server `llmqed` backend. The generic
-request-response provider path does not use it yet.
+The `codex` API kind uses Codex app-server through the current experimental provider path. Today it
+starts app-server for a cache miss, runs one turn, parses returned suggestions, and then validates
+them in Lean before display. See [codex-app-server-architecture.md](codex-app-server-architecture.md)
+for the planned persistent-session design.
 
 Configuration variables:
 

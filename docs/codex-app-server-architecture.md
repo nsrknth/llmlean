@@ -1,203 +1,367 @@
 # Codex App-Server Architecture
 
-This document describes the proposed architecture for integrating Codex app-server with LLMLean.
-It is intentionally scoped to the smallest useful integration: make `llmqed` able to use Codex as
-an app-server-native proof assistant, with Lean validation exposed as a Codex dynamic tool.
+This document describes the Codex app-server integration direction for LLMLean after reviewing:
 
-The goal is not to build a general Codex SDK in Lean. The goal is to let Codex use Lean as the
-host runtime while proving the current goal.
+- the official Codex app-server manual section
+- the official Codex speed section
+- Symphony's app-server spec and Elixir implementation under
+  `app-server-example-usage/symphony`
+- the current LLMLean Codex spike in `LLMlean/API/Codex`
 
-## Summary
+The current implementation is a useful protocol smoke test. It is not yet the right editor
+architecture. The next architecture should keep a Codex app-server process and thread alive inside
+the current Lean process after the first explicit LLM tactic invocation.
 
-Codex app-server should be integrated as a `TacticM`-native backend for `llmqed`.
+## Current Conclusion
 
-The current provider path in LLMLean is essentially:
+Use Codex app-server as a session protocol, not as a per-request completion API.
+
+The important distinction is:
 
 ```text
-llmqed / llmstep
+Completion-style backend:
+  prompt -> HTTP/API request -> response text
+
+Codex app-server backend:
+  connection -> initialize -> thread -> turn -> event stream -> optional client tools -> completion
+```
+
+The current LLMLean spike still behaves like the first shape on every cache miss:
+
+```text
+llmstep / llmqed
   -> build prompt
-  -> send request to an LLM API
-  -> parse text response
-  -> validate returned candidates in Lean
-  -> display valid suggestions
+  -> start `codex app-server`
+  -> initialize
+  -> thread/start
+  -> turn/start
+  -> await turn/completed
+  -> parse final text
+  -> terminate app-server
 ```
 
-The Codex app-server path should be:
+That is protocol-correct, but it throws away the thing app-server gives us: a live connection,
+thread identity, streaming events, and reusable conversation state.
+
+The revised target is:
 
 ```text
-llmqed
-  -> start an app-server session
-  -> create a Codex thread
-  -> start a turn with goal/context
-  -> expose Lean validation as a dynamic tool
-  -> handle app-server events until turn completion
-  -> parse final candidate proofs
-  -> revalidate returned candidates in Lean
-  -> display valid suggestions
+import LLMlean
+  -> register options and create an empty session manager only
+
+first explicit llmstep/llmqed using api = "codex"
+  -> lazy-start `codex app-server`
+  -> initialize once
+  -> thread/start once for the current project/session
+  -> turn/start for this suggestion request
+  -> await turn/completed
+  -> keep process and thread alive
+
+later llmstep/llmqed in the same Lean process
+  -> reuse the live app-server process
+  -> reuse or resume the live thread
+  -> start another turn
 ```
 
-This is the meaningful difference from treating Codex as another completion API. Codex can call
-back into the host. For LLMLean, the host capability that matters is Lean's tactic checker.
+Do not start Codex at module import time. Import can allocate the session manager; it should not
+start external processes or model turns.
 
-## Non-Goals
+## Why It Is Slow Today
 
-The first implementation should not include:
+There are four separate latency sources.
 
-- a general Codex SDK
-- generated Lean bindings for the full app-server schema
-- WebSocket transport
-- MCP integration
-- file edit approval flows
-- command execution approval flows
-- a dashboard or orchestration service
-- persistent cross-file Codex sessions
-- `llmstep` support
-- broad app-server configuration UI
+1. Codex model latency.
 
-Those can be reconsidered after the `llmqed` path works and is useful.
+   Local measurements on simple Lean goals showed process startup, initialization, `thread/start`,
+   and `turn/start` completing in well under a second, while the app-server turn itself took roughly
+   20 to 25 seconds. Persistent sessions will not eliminate that whole cost.
 
-## Current LLMLean Boundaries
+2. Per-prompt app-server startup.
 
-Relevant current files:
+   Even though startup is not the dominant cost in the measured examples, repeatedly starting
+   app-server is still wrong for an editor workflow. It adds fixed overhead, discards thread context,
+   prevents useful continuation turns, and makes repeated Infoview refreshes feel heavier than
+   necessary.
 
-- `LLMlean/Config.lean`
-  - Defines `APIKind`, `API`, provider defaults, and config parsing.
-- `LLMlean/API/Common.lean`
-  - Defines shared request/response structures and `getConfiguredAPI`.
-  - Defines the current `post` helper for request-response HTTP providers.
-- `LLMlean/API/ProofGen.lean`
-  - Defines `API.proofCompletion` and `API.proofCompletionRefinement`.
-- `LLMlean/API/TacticGen.lean`
-  - Defines `API.tacticGeneration`.
-- `LLMlean/LLMqed.lean`
-  - Runs `llmqed`, gets the current goal and file context, calls the configured backend, and displays
-    suggestions.
-- `LLMlean/LLMstep.lean`
-  - Runs `llmstep` and defines `checkSuggestion`.
-- `LLMlean/IterativeRefinement.lean`
-  - Defines `checkProofCompletion`, `generateSingleProofAttempt`, and the current refinement loop.
+3. Lean editor elaboration churn.
 
-The key architectural issue is that `API.proofCompletion` runs in `CoreM`, while Lean proof
-validation lives naturally in `Elab.Tactic.TacticM`.
+   Lean can re-elaborate files as imports, options, and preceding declarations change. A live LLM
+   tactic inside a normal build target can therefore trigger expensive turns during `lake build` or
+   editor refresh, not only when the user mentally expects a suggestion.
 
-Codex app-server should not be forced entirely through `API.proofCompletion`, because the valuable
-integration is dynamic tool calls into Lean's checker during the app-server turn.
+4. Output contract and validation churn.
 
-## Core Design Choice
+   If Codex returns prose or partial formatting, LLMLean still has to parse, filter, validate, and
+   display suggestions. Bad extraction can make the user see one partial suggestion even when the
+   model spent a full turn. Recent parser and verbose-log fixes reduce this, but they do not change
+   model latency.
 
-Add `APIKind.Codex` for configuration, but branch to a Codex-native path in `LLMqed.lean`.
+Persistent app-server sessions address item 2 and make item 3 easier to control. They do not, by
+themselves, make a 20 second Codex turn become instant. For perceived speed, we also need prompt
+discipline, caching, streaming diagnostics, and eventually a smaller/faster model or service tier
+when available.
 
-Conceptually:
+## Official App-Server Model
+
+The official app-server docs describe Codex app-server as the interface for rich clients that need
+authentication, history, approvals, and streamed agent events. They also explicitly distinguish
+this from automation or CI jobs, where the Codex SDK is the recommended surface.
+
+The important app-server lifecycle is:
 
 ```text
-def llmQedWithConfiguredBackend (ctx : String) (g : MVarId) :
-    Elab.Tactic.TacticM (Array (Prod String Float)) := do
-  let api := getConfiguredAPI Config.TacticKind.LLMQed
-  match api.kind with
-  | Config.APIKind.Codex =>
-      Codex.runQed ctx g api
-  | _ =>
-      liftMetaMAtMain (llmQed ctx g)
+open transport
+send initialize
+send initialized
+thread/start or thread/resume
+turn/start
+read notifications and server requests until turn/completed
 ```
 
-The exact code will differ, but the boundary matters:
+The docs call out that clients should initialize once per connection, then use thread and turn APIs.
+This strongly suggests an LLMLean client should not repeatedly create a fresh app-server connection
+for every suggestion once the protocol spike is past the smoke-test phase.
 
-- non-Codex providers keep the existing `CoreM` request-response API path
-- Codex uses a `TacticM` path so it can handle `lean_validate` tool calls
+The speed docs are relevant but secondary. Fast mode and faster Codex models may reduce model time
+when the user's account, selected model, and Codex surface support them. They are not an architecture
+substitute for a correct long-lived app-server client.
 
-## Proposed File Layout
+## Symphony Lessons
+
+Symphony is the useful example because it uses app-server directly from Elixir without relying on a
+language-native Codex SDK.
+
+The most relevant design points:
+
+- `start_session` starts the subprocess, initializes app-server, and creates a thread.
+- `run_turn` starts a turn on an existing session.
+- A worker can run continuation turns on the same live thread.
+- The spec says the app-server subprocess should remain alive across continuation turns and stop
+  only when the worker run ends.
+- The test suite asserts this behavior: one `thread/start`, multiple `turn/start` calls for a
+  continued worker run.
+- The client keeps stream handling separate from higher-level orchestration. It emits structured
+  events for notifications, turn completion, failures, malformed lines, token usage, and tool or
+  approval handling.
+- It uses large turn timeouts for real Codex work. The default in the Elixir schema is one hour,
+  which is very different from treating every app-server turn like a short HTTP request.
+
+The LLMLean equivalent should be smaller, but the shape is the same:
 
 ```text
-LLMlean/API/Codex/Protocol.lean
-LLMlean/API/Codex/Transport.lean
-LLMlean/API/Codex/Tools.lean
-LLMlean/API/Codex/Qed.lean
+session manager:
+  owns process, connection, thread id, request ids, policy, cwd, model
+
+suggestion request:
+  sends one turn/start on the existing thread
+  waits for turn terminal event
+  parses candidates
 ```
 
-The modules are intentionally small.
+## Why Not Start At `import LLMlean`
 
-### `Protocol.lean`
+Starting Codex when the module is imported is the wrong boundary.
 
-Owns the small JSON-RPC message helpers needed by LLMLean.
+Lean imports happen during builds, editor server startup, dependency loading, and worker process
+creation. They are not a user intent signal. If `import LLMlean` started `codex app-server`, then a
+plain `lake build`, a downstream package import, or an editor restart could create external
+processes and possibly begin auth/session work before any tactic is used.
 
-Responsibilities:
+What is safe at import/module initialization:
 
-- construct `initialize`
-- construct `initialized`
-- construct `thread/start`
-- construct `turn/start`
-- construct JSON-RPC responses to app-server requests
-- inspect a message for `id`, `method`, `result`, and `error`
-- extract thread id from `thread/start` response
-- extract turn id from `turn/start` response
-- extract final assistant text or candidates from `turn/completed`
+- register Lean options
+- initialize `IO.Ref`s
+- initialize a lock or serialized queue
+- install syntax/elaborator declarations
 
-It should not try to encode the entire app-server protocol as Lean inductive types.
+What is not safe at import/module initialization:
 
-Recommended representation:
+- spawn `codex app-server`
+- authenticate or open remote model sessions
+- start app-server threads
+- start turns
+- run suggestions
+
+The practical compromise is lazy startup:
+
+```text
+initialize codexSessionRef : IO.Ref (Option LiveSession) <- IO.mkRef none
+
+on first explicit llmstep/llmqed with llmlean.api = "codex":
+  if no compatible live session exists:
+    start app-server
+    initialize
+    thread/start
+  run turn/start
+```
+
+This keeps imports deterministic while still avoiding repeated spawn/initialize/thread work after
+the user explicitly asks Codex for suggestions.
+
+## Session Scope
+
+The first persistent implementation should be scoped to one Lean process.
+
+```text
+scope:
+  current Lean server or `lake env lean` process
+
+not scope:
+  global daemon shared across all projects
+  persistent history across editor restarts
+  shared process across unrelated cwd/model/policy combinations
+```
+
+A live session is compatible only when the important configuration matches:
+
+- app-server command
+- project cwd
+- model
+- approval policy
+- thread sandbox
+- turn sandbox policy shape
+- dynamic tool set
+
+If any of those change, the manager should start a new session or explicitly restart the old one.
+
+## Session Manager Shape
+
+The next implementation should introduce a real session manager beside the current one-shot wrapper.
+
+Suggested module:
+
+```text
+LLMlean/API/Codex/Session.lean
+```
+
+Suggested structures:
 
 ```lean
-abbrev RequestId := Nat
+structure SessionKey where
+  command : String
+  cwd : String
+  model : Option String
+  approvalPolicyKey : String
+  threadSandboxKey : String
+  turnSandboxPolicyKey : String
+  dynamicToolsKey : String
 
-structure RpcRequest where
-  id : RequestId
-  method : String
-  params : Json
-
-structure RpcNotification where
-  method : String
-  params : Json
+structure LiveSession where
+  key : SessionKey
+  server : LLMlean.Codex.Client.AppServer
+  threadId : String
+  nextRequestId : Nat
+  startedAtMs : Nat
+  lastUsedAtMs : Nat
 ```
 
-Use `Json` for protocol-owned payloads. Keep typed structures only for LLMLean-owned payloads, such
-as final candidate lists and dynamic tool results.
+The exact Lean primitives for locking should be verified in code, but the behavior must be:
 
-### `Transport.lean`
+- at most one active turn per live session unless app-server concurrency is explicitly supported
+- concurrent tactic elaborations are serialized or receive a clear "Codex busy" error
+- session replacement terminates the old process
+- process exit is detected and clears the stored session
+- a manual restart option can force a new process and thread
 
-Owns app-server transport I/O.
-
-First implementation:
-
-```text
-stdio subprocess transport
-```
-
-Lean has the primitives needed:
-
-- `IO.Process.spawn`
-- piped `stdin`
-- piped `stdout`
-- `IO.FS.Handle.putStr`
-- `IO.FS.Handle.flush`
-- `IO.FS.Handle.getLine`
-- `Json.parse`
-- `Json.compress`
-
-Suggested interface:
+Possible user-facing options:
 
 ```lean
-structure AppServerTransport where
-  send : Json -> IO Unit
-  recv : IO Json
-  close : IO Unit
+set_option llmlean.codexPersistent true
+set_option llmlean.codexCache true
+set_option llmlean.codexTurnTimeoutMs 180000
 ```
 
-The first transport can spawn the configured command. A later transport could speak to a persistent
-Unix socket without changing the proof-generation logic.
+The default can remain conservative while the feature is experimental, but the architecture should
+be persistent-first.
 
-The transport should treat the app-server wire format as newline-delimited JSON:
+## One-Shot Wrapper Role
+
+The existing wrapper in `LLMlean/API/Codex/Completion.lean` should not be deleted immediately.
+
+Keep it for:
+
+- protocol smoke tests
+- fake app-server tests
+- fallback when persistent sessions are disabled
+- isolating failures during development
+
+But production editor use should move from:
+
+```lean
+withAppServer command cwd fun server => ...
+```
+
+to:
+
+```lean
+withCodexSession key fun session => ...
+```
+
+where `withCodexSession` reuses the existing process and thread whenever possible.
+
+## Turn Handling
+
+A reused session still starts a new turn for each suggestion request.
 
 ```text
-send Json.compress message ++ "\n"
-read one line
-Json.parse line
+turn/start:
+  threadId = stored thread id
+  cwd = current project cwd
+  input = current goal/context prompt
+  title = optional short file/line/goal title
+  approvalPolicy = conservative policy
+  sandboxPolicy = read-only by default
 ```
 
-### `Tools.lean`
+The client must continue reading the app-server stream until a terminal turn event:
 
-Owns Codex dynamic tools implemented by Lean.
+- `turn/completed`
+- `turn/failed`
+- `turn/cancelled`
+- timeout
+- subprocess exit
+- required input or approval that LLMLean cannot satisfy
 
-First and only initial tool:
+While waiting, it should handle:
+
+- `item/agentMessage/delta`: accumulate text and optionally verbose-log progress
+- `thread/tokenUsage/updated`: verbose-log token accounting
+- unsupported `item/tool/call`: return a clear failure result and keep reading
+- command/file approval requests: decline or fail according to policy
+- malformed non-protocol lines: verbose-log, do not crash unless they block protocol progress
+
+## Prompting and Candidate Extraction
+
+For the current completion-style spike, ask Codex for multiple tactics in a strict format:
+
+```text
+[TAC]
+...
+[/TAC]
+
+[TAC]
+...
+[/TAC]
+```
+
+This is more robust than asking for prose or a single fenced code block. LLMLean should keep the
+defensive extraction rules:
+
+- prefer explicit `[TAC]...[/TAC]` blocks
+- accept fenced Lean code blocks when useful
+- ignore prose-only responses
+- filter candidates that do not look like Lean tactics
+- verbose-log raw response, parsed count, and kept candidates when `llmlean.verbose = true`
+
+Final display still depends on Lean-side validation. Codex output is a suggestion source, not a
+proof certificate.
+
+## Dynamic Lean Tooling
+
+The truly app-server-native design is still to expose Lean validation as a client-side Codex tool.
+That should come after the lifecycle is fixed.
+
+Initial tool:
 
 ```json
 {
@@ -208,479 +372,165 @@ First and only initial tool:
     "additionalProperties": false,
     "required": ["kind", "candidates"],
     "properties": {
-      "kind": {
-        "type": "string",
-        "enum": ["proof", "tactic"]
-      },
-      "candidates": {
-        "type": "array",
-        "items": { "type": "string" }
-      }
+      "kind": { "type": "string", "enum": ["proof", "tactic"] },
+      "candidates": { "type": "array", "items": { "type": "string" } }
     }
   }
 }
 ```
 
-Handler behavior:
+This requires a `TacticM`-native path because the useful validation context is the current Lean
+goal. A pure `CoreM` completion wrapper cannot naturally service this tool. The persistent session
+manager can be shared, but `llmstep` and `llmqed` should call it from tactic elaborators when dynamic
+tools are enabled.
 
-- `kind = "proof"`
-  - run `checkProofCompletion` from `IterativeRefinement.lean`
-- `kind = "tactic"`
-  - run `checkSuggestion` from `LLMstep.lean`
-- return one result per candidate
-- include parse/typechecking error messages for failures
-- never modify the Lean state
+Tool responses should include:
 
-Example tool result payload:
+- candidate string
+- parse status
+- elaboration/check result
+- concise error text
+- whether the candidate closes the goal
 
-```json
-{
-  "success": true,
-  "contentItems": [
-    {
-      "type": "inputText",
-      "text": "{\"results\":[{\"candidate\":\"simp\",\"status\":\"valid\",\"error\":null}]}"
-    }
-  ]
-}
-```
+Even if Codex used `lean_validate`, LLMLean must revalidate before displaying or accepting a
+candidate.
 
-Tool output should be text JSON because app-server dynamic tools accept content items, not arbitrary
-Lean values.
+## Build And Test Policy
 
-### `Qed.lean`
+Do not leave live Codex tactics in files that are part of the default build target.
 
-Owns the `llmqed` app-server session.
-
-Responsibilities:
-
-- build the Codex proof prompt
-- start app-server transport
-- run the app-server startup sequence
-- start one Codex turn
-- handle messages until the turn completes or fails
-- dispatch `lean_validate`
-- parse final candidates
-- close the transport
-
-This module should expose one main function:
-
-```lean
-def runQed (ctx : String) (goal : MVarId) (api : Config.API) :
-    Elab.Tactic.TacticM (Array (Prod String Float))
-```
-
-The returned candidates must still pass the existing `addSuggestions'` validation path in
-`LLMqed.lean`.
-
-## App-Server State Machine
-
-The app-server client should be a small explicit state machine.
+Live files such as:
 
 ```text
-open transport
-send initialize(id = 1)
-await response id = 1
-send initialized notification
-
-send thread/start(id = 2)
-await response id = 2
-record thread_id
-
-send turn/start(id = 3)
-await response id = 3
-record turn_id
-
-loop:
-  if message is item/tool/call:
-    handle supported tool or return unsupported-tool result
-    continue
-
-  if message is item/agentMessage/delta:
-    append delta to stream buffer
-    continue
-
-  if message is turn/completed:
-    parse final candidates from turn payload or accumulated final text
-    return candidates
-
-  if message is approval or input request:
-    decline, cancel, or fail according to policy
-
-  otherwise:
-    ignore or verbose-log notification
-    continue
-
-close transport
+LLMleanTest/Manual/CodexLLMStep.lean
 ```
 
-The client must not wait only for a final text message. App-server is bidirectional. It can send
-server-to-client requests during a turn, including dynamic tool calls and approval requests.
+are the right home for interactive Infoview experiments. Build-target example files should use
+ordinary Lean proofs, `sorry`, or disabled examples. Otherwise `lake build` can trigger real Codex
+turns and fail because of timeout, auth, or network state.
 
-## Startup Messages
+Suggested tests:
 
-### Initialize
+- pure protocol JSON tests
+- fake app-server process tests for initialize/thread/start/turn/start
+- fake continuation test proving one `thread/start` and multiple `turn/start`
+- parser smoke tests under `LLMleanTest/Manual` or a non-live test target
+- manual live Codex Infoview file for human verification
 
-Use app-server initialization with a client identity for LLMLean.
+Live Codex tests should remain opt-in because they depend on local Codex authentication, installed
+Codex version, account/model availability, and network state.
 
-```json
-{
-  "method": "initialize",
-  "id": 1,
-  "params": {
-    "clientInfo": {
-      "name": "llmlean",
-      "title": "LLMLean",
-      "version": "0.1.0"
-    },
-    "capabilities": {
-      "experimentalApi": true
-    }
-  }
-}
-```
+## Diagnostics
 
-`experimentalApi` is needed if the implementation uses experimental fields such as dynamic tools or
-output schemas in the installed app-server version. If the installed schema stabilizes those fields,
-this can be revisited.
+Verbose mode should make the latency and extraction pipeline visible:
 
-### Thread Start
+- cache hit or miss
+- whether persistent session was reused or started
+- startup, initialize, thread/start, turn/start, and turn completion timings
+- raw app-server errors
+- streamed agent text snippets or final text
+- parsed candidate count
+- candidate validation result labels
+- displayed suggestion count
+- token usage events when app-server emits them
 
-The thread should be scoped to the current Lean project.
+This is necessary for editor debugging. Without it, a slow or malformed Codex response looks like an
+LLMLean tactic bug.
 
-```json
-{
-  "method": "thread/start",
-  "id": 2,
-  "params": {
-    "cwd": "/absolute/path/to/project",
-    "model": "optional-model-from-config",
-    "approvalPolicy": "never",
-    "sandbox": "read-only",
-    "dynamicTools": [
-      {
-        "name": "lean_validate",
-        "description": "Validate Lean tactic or proof candidates in the current goal without modifying state.",
-        "inputSchema": {}
-      }
-    ]
-  }
-}
-```
+## Revised Implementation Phases
 
-Use exact payload fields supported by the installed app-server schema. Current local app-server
-schemas accept string variants such as `untrusted`, `on-failure`, `on-request`, `granular`, and
-`never`; older object-form policies such as `{"reject": ...}` may be rejected. Do not hard-code a
-large local enum of policy shapes. Treat Codex-owned policy payloads as pass-through JSON.
+### Phase 0: Protocol Spike
 
-### Turn Start
+Status: implemented.
 
-The turn carries the goal, context, and output contract.
-
-```json
-{
-  "method": "turn/start",
-  "id": 3,
-  "params": {
-    "threadId": "thread-id-from-thread-start",
-    "cwd": "/absolute/path/to/project",
-    "input": [
-      {
-        "type": "text",
-        "text": "proof prompt goes here"
-      }
-    ],
-    "sandboxPolicy": {
-      "type": "readOnly",
-      "networkAccess": false
-    },
-    "outputSchema": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["candidates"],
-      "properties": {
-        "candidates": {
-          "type": "array",
-          "items": { "type": "string" }
-        }
-      }
-    }
-  }
-}
-```
-
-The exact `sandboxPolicy` shape should be checked against the installed app-server schema. The
-important policy is no command/file side effects by default.
-
-## Prompt Contract
-
-The prompt should not ask Codex to modify files. It should ask Codex to return proof candidates.
-
-Sketch:
-
-```text
-You are helping complete a Lean 4 proof for LLMLean.
-
-Return only JSON matching the provided output schema:
-{"candidates": ["..."]}
-
-You may call the lean_validate tool to test proof candidates.
-Do not edit files.
-Do not run shell commands.
-Do not ask for user input.
-
-Current Lean context:
-<context>
-
-Current goal:
-<goal>
-
-Generate 3 to 5 proof candidates. Prefer candidates that lean_validate reports as proof_done.
-```
-
-If Codex calls `lean_validate`, the handler can return detailed error strings. Codex can then
-revise before final output.
-
-## Candidate Extraction
-
-Candidate extraction should be defensive:
-
-1. Prefer final `agentMessage` with phase `final_answer` when present in `turn/completed`.
-2. Fall back to the last `agentMessage` in the completed turn payload.
-3. Fall back to accumulated `item/agentMessage/delta` text.
-4. Parse the selected text as JSON.
-5. Extract `candidates : Array String`.
-6. If JSON parsing fails, fall back to existing Markdown/code-block extraction only if useful.
-
-The final display path should still validate candidates with `addSuggestions'`. Codex tool results
-are useful guidance, not trusted proof certificates.
-
-## Approval and Input Policy
-
-LLMLean is an interactive proof assistant integration, not an autonomous coding worker. The first
-implementation should not allow Codex to perform side effects.
-
-Recommended policy:
-
-- `item/commandExecution/requestApproval`
-  - respond with decline or cancel
-- `item/fileChange/requestApproval`
-  - respond with decline or cancel
-- legacy `execCommandApproval`
-  - respond with denial
-- legacy `applyPatchApproval`
-  - respond with denial
-- `mcpServer/elicitation/request`
-  - respond with decline, or fail the turn
-- `item/tool/requestUserInput`
-  - answer with a fixed non-interactive response, or fail the turn
-- unsupported `item/tool/call`
-  - return `success=false` with a clear unsupported-tool message
-
-The client must not stall indefinitely on any of these messages.
-
-## Configuration
-
-Minimal config additions:
-
-```toml
-api = "codex"
-model = "gpt-5.4" # optional; omitted uses Codex defaults
-codexCommand = "codex app-server"
-codexReadTimeoutMs = 5000
-codexTurnTimeoutMs = 120000
-```
-
-Environment variables:
-
-```bash
-LLMLEAN_API=codex
-LLMLEAN_MODEL=gpt-5.4
-LLMLEAN_CODEX_COMMAND='codex app-server'
-LLMLEAN_CODEX_READ_TIMEOUT_MS=5000
-LLMLEAN_CODEX_TURN_TIMEOUT_MS=120000
-```
-
-Lean options can mirror the same fields if desired:
-
-```lean
-set_option llmlean.api "codex"
-set_option llmlean.model "gpt-5.4"
-set_option llmlean.codexCommand "codex app-server"
-```
-
-Do not add rich policy configuration in the first pass. Keep policy conservative and hard-coded.
-
-## Error Handling
-
-Expected error cases:
-
-- app-server command not found
-- app-server exits before initialization
-- initialize response has error
-- thread/start response missing thread id
-- turn/start response missing turn id
-- malformed JSON line
-- unexpected response id
-- dynamic tool call has invalid input
-- turn times out
-- turn completes without parseable candidates
-- app-server requests unsupported user input
-- app-server requests command or file approval
-
-Each error should become a Lean error message that explains:
-
-- which app-server phase failed
-- the app-server method or request id involved, if known
-- the response error message, if app-server provided one
-
-Verbose mode can include raw app-server notifications, but normal mode should stay quiet.
-
-## Interaction With Existing Iterative Refinement
-
-There are two possible designs.
-
-### Preferred Initial Design
-
-Codex handles refinement inside one app-server turn using `lean_validate`.
-
-```text
-Codex proposes candidate
-Codex calls lean_validate
-Lean returns errors
-Codex revises
-Codex returns final candidates
-LLMLean revalidates
-```
-
-This avoids layering LLMLean's existing outer iterative loop on top of Codex's app-server turn loop.
-
-### Later Design
-
-Reuse one Codex thread across multiple `turn/start` calls.
-
-```text
-turn 1 -> candidates fail final LLMLean validation
-turn 2 -> continuation prompt with exact Lean errors
-turn 3 -> final candidates
-```
-
-This mirrors Symphony's continuation-turn pattern. It is useful if single-turn tool use is
-insufficient, but it should not be part of the first slice.
-
-## Why Not Put Everything Behind `API.proofCompletion`
-
-`API.proofCompletion` is the right abstraction for completion providers:
-
-```text
-prompt -> response text
-```
-
-Codex app-server is a session protocol:
-
-```text
-thread -> turn -> notifications -> tool calls -> final state
-```
-
-Forcing Codex into `API.proofCompletion` would either:
-
-- lose dynamic tool calls into Lean, or
-- require passing `TacticM` capabilities through a `CoreM` API in an awkward way
-
-The correct compromise is:
-
-- add `APIKind.Codex` for config selection
-- branch in `LLMqed.lean`
-- keep existing provider APIs for existing providers
-
-## Implementation Phases
-
-### Phase 1: Minimal Native `llmqed`
-
-Deliverables:
+Implemented pieces:
 
 - `APIKind.Codex`
-- Codex config fields
-- stdio JSONL transport
-- initialize/thread/start/turn/start protocol helpers
-- one `lean_validate` dynamic tool
-- one-turn `Codex.runQed`
-- `llmqed` branch for `api = "codex"`
-- final candidate extraction from JSON
-- revalidation through existing `addSuggestions'`
+- app-server JSON helpers
+- process-backed JSONL client
+- single-turn completion wrapper
+- Codex path wired into `llmstep` and `llmqed`
+- response cache for identical prompts in the current Lean process
+- multi-candidate tactic parsing
+- verbose extraction and validation logs
 
-This is the first useful milestone.
+This proves app-server can be driven from Lean, but it is still one-shot.
 
-### Phase 2: Better Diagnostics
+### Phase 1: Lazy Persistent Session
 
-Deliverables:
-
-- verbose app-server event tracing
-- clearer Lean error messages
-- timeout configuration
-- raw response snippets on parse failure
-- small fake app-server tests for protocol helpers
-
-### Phase 3: Continuation Turns
+Next best step.
 
 Deliverables:
 
-- keep one live thread for multiple turns during one `llmqed`
-- feed final validation errors into a continuation turn
-- cap continuation count
-- stop on first proof-complete candidate
+- `LLMlean/API/Codex/Session.lean`
+- process/thread reuse across multiple Codex turns in one Lean process
+- serialized access to a live session
+- compatibility key for command/cwd/model/policy/tool set
+- explicit restart/cleanup path
+- verbose logs showing reuse vs startup
+- fake app-server regression test:
+  - one `initialize`
+  - one `thread/start`
+  - two `turn/start` calls across two suggestions
 
-This should only happen after Phase 1 proves useful.
+Acceptance criterion:
 
-### Phase 4: Optional `llmstep`
+```text
+Two sequential Codex suggestions in one Lean process should not spawn two app-server processes and
+should not send two thread/start requests for the same compatible session.
+```
 
-`llmstep` can use the same transport and `lean_validate` tool, but its latency expectations are
-different. It should not block the `llmqed` integration.
+### Phase 2: Editor-Safe Controls
 
-## Test Strategy
+Deliverables:
 
-Tests should avoid requiring live Codex initially.
+- keep live experiments under `LLMleanTest/Manual`
+- document that default builds should not execute live Codex tactics
+- clearer errors for "Codex busy", timeout, process exit, and required input
+- optional idle timeout or manual restart command
+- stable verbose logs for Infoview and CLI builds
 
-Suggested fake app-server tests:
+### Phase 3: Tactic-Native Dynamic Tool
 
-- initialize response is matched by id
-- `thread/start` payload includes `dynamicTools`
-- `turn/start` payload includes `outputSchema`
-- `item/tool/call` dispatches `lean_validate`
-- unsupported tool returns `success=false`
-- command approval request is declined or fails deterministically
-- `turn/completed` with final JSON returns candidates
-- malformed JSON reports a useful error
-- timeout reports the current phase
+Deliverables:
 
-Live Codex testing can be manual or opt-in because it depends on local authentication and installed
-Codex version.
+- `lean_validate` dynamic tool
+- `llmstep` TacticM-native Codex path
+- `llmqed` TacticM-native Codex path
+- Codex can test candidates during the turn
+- final suggestions still revalidated by LLMLean
+
+This is where app-server becomes meaningfully better than a completion backend.
+
+### Phase 4: Streaming UI And Faster Feedback
+
+Deliverables:
+
+- stream partial app-server events into a useful Lean message or widget path when feasible
+- show "thinking/streaming" state instead of silent waiting
+- expose token usage and elapsed time in verbose mode
+- evaluate faster Codex model/service-tier options separately from architecture
 
 ## Open Questions
 
-- Should the initial transport run `codex app-server` directly, or run a configurable shell command?
-  A configurable command is more flexible, but direct argv is less shell-sensitive.
-- Should the first version use `outputSchema` unconditionally, or make it conditional on app-server
-  experimental capability?
-- Should approval/input requests fail the turn immediately, or return denial and let Codex continue?
-  Denial is more graceful; immediate failure is easier to reason about.
-- Should `lean_validate` accept one candidate or a list? A list is more efficient and encourages
-  Codex to batch checks.
-- Should final candidates include metadata from tool checks? The UI currently only needs strings and
-  scores, so metadata can wait.
+- Should the default persistent session be enabled immediately, or guarded by
+  `llmlean.codexPersistent` during stabilization?
+- Should a session be per project cwd or per Lean file? Project cwd is simpler and closer to
+  app-server's thread model.
+- Should `llmstep` and `llmqed` share the same thread? Sharing improves context reuse; separate
+  threads may avoid confusing proof-completion and next-tactic prompts.
+- What Lean locking primitive should be used for portable serialized access?
+- Should an idle timeout kill app-server after several minutes, or should it live until the Lean
+  process exits?
+- How should users manually restart the session from Lean/Infoview if Codex state becomes stale?
 
 ## Recommendation
 
-Build Phase 1 only:
+Implement Phase 1 next.
 
-```text
-Codex-native llmqed
-stdio JSONL app-server client
-one Lean dynamic tool: lean_validate
-strict no-side-effect policy
-JSON final candidates
-existing LLMLean validation before display
-```
+Do not start Codex at `import LLMlean`. Start it lazily on the first explicit Codex-backed
+`llmstep` or `llmqed`, keep the process and thread alive for subsequent suggestions in the same
+Lean process, and verify the behavior with a fake app-server test before adding dynamic Lean tools.
 
-This is the smallest architecture that is actually app-server-native. Anything smaller is just a
-completion backend. Anything larger starts becoming a standalone Codex client.
+That is the smallest change that aligns LLMLean with the official app-server lifecycle and
+Symphony's successful app-server usage pattern.

@@ -17,6 +17,25 @@ def splitProof (text : String) : String :=
   | some s => s.trim
   | none => text.trim
 
+def splitProofs (text : String) : Array String := Id.run do
+  let parts := (text.splitOn "[PROOF]").tailD []
+  let mut results : Array String := #[]
+  for part in parts do
+    match (part.splitOn "[/PROOF]").head? with
+    | some proof =>
+        let proof := proof.trim
+        if proof.length > 0 then
+          results := results.push proof
+    | none => pure ()
+  if results.isEmpty then
+    let proof := splitProof text
+    if proof.trim.length > 0 then
+      return #[proof.trim]
+    else
+      return #[]
+  else
+    return results
+
 /-!
 ## OpenAI
 -/
@@ -85,15 +104,51 @@ def qedAnthropic (prompts : List String)
 def codexProofModel? (api : API) : Option String :=
   if api.model.trim == "" then none else some api.model
 
-def qedCodex (prompts : List String) (api : API) : CoreM $ Array (String × Float) := do
+def codexMultiProofPrompt (prompt : String) (numSamples : Nat) : String :=
+  if numSamples <= 1 then
+    prompt
+  else
+    prompt ++ s!"
+
+For this Codex app-server request, return up to {numSamples} distinct proof completions.
+Put each candidate in its own [PROOF]...[/PROOF] block.
+Each [PROOF] block must contain only Lean tactic script text.
+Do not include explanations, comments, skill/tool mentions, or Markdown outside proof blocks."
+
+def qedCodex (prompts : List String) (api : API) (options : ChatGenerationOptionsQed) :
+    CoreM $ Array (String × Float) := do
   let some prompt := prompts.head?
     | return #[]
+  Config.verbosePrint
+    s!"Codex llmqed requested up to {options.numSamples} proof sample(s)"
+  if options.numSamples > 1 then
+    Config.verbosePrint
+      s!"Codex llmqed currently uses one app-server turn; numSamples={options.numSamples} is a prompt-level request for multiple [PROOF] blocks, not {options.numSamples} independent Codex samples"
+  let prompt := codexMultiProofPrompt prompt options.numSamples
+  Config.verbosePrint s!"Codex llmqed prompt length: {prompt.length} characters"
   let response ← LLMlean.Codex.Completion.runConfiguredPrompt prompt (codexProofModel? api)
-  let proof := splitProof response
-  if filterGeneration proof then
-    return #[(proof, 1.0)]
-  else
-    return #[]
+  Config.verbosePrint s!"Codex llmqed raw response:\n{response}"
+  let parsedProofs := splitProofs response
+  Config.verbosePrint s!"Codex parsed {parsedProofs.size} proof block(s)"
+  for proof in parsedProofs do
+    Config.verbosePrint s!"Parsed proof:\n{proof}"
+  let mut results : Std.HashSet String := Std.HashSet.emptyWithCapacity
+  let mut acceptedBeforeDedupe := 0
+  let mut rejectedByBannedToken := 0
+  for proof in parsedProofs do
+    if filterGeneration proof then
+      acceptedBeforeDedupe := acceptedBeforeDedupe + 1
+      results := results.insert proof
+    else
+      rejectedByBannedToken := rejectedByBannedToken + 1
+      Config.verbosePrint s!"Codex rejected proof because it contains a banned token:\n{proof}"
+  let duplicateCount := acceptedBeforeDedupe - results.size
+  Config.verbosePrint
+    s!"Codex llmqed generation summary: requested={options.numSamples}, appServerTurns=1, parsed={parsedProofs.size}, bannedFiltered={rejectedByBannedToken}, deduped={duplicateCount}, returned={results.size}"
+  if options.numSamples > 1 && results.size < options.numSamples then
+    Config.verbosePrint
+      s!"Codex returned fewer proofs than requested before Lean validation; current root cause is usually the single-turn prompt contract or candidate parsing/filtering, not the Infoview widget"
+  return results.toArray.map fun proof => (proof, 1.0)
 
 /-!
 ## Ollama
@@ -231,7 +286,7 @@ def LLMlean.Config.API.proofCompletion
     | APIKind.Anthropic =>
       qedAnthropic prompts api options
     | APIKind.Codex =>
-      qedCodex prompts api
+      qedCodex prompts api options
 
 /--
 Generates proof completions with refinement context using the LLM API.
@@ -255,6 +310,6 @@ def LLMlean.Config.API.proofCompletionRefinement
     | APIKind.Anthropic =>
       qedAnthropic prompts api options
     | APIKind.Codex =>
-      qedCodex prompts api
+      qedCodex prompts api options
 
 end LLMlean
