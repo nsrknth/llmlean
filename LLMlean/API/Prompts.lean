@@ -28,12 +28,23 @@ Proof style guidance:
 Proof style guidance:
 - Follow this user-requested proof style: {style}."
 
+def tacticPrefixInstructions (pre : String) : String :=
+  if pre == "" then
+    "No tactic prefix was provided, so return the complete next tactic."
+  else
+    s!"The tactic prefix is provided in [PREFIX]...[/PREFIX].
+Return only the suffix to append after that exact prefix.
+Do not repeat, edit, explain, or wrap the prefix."
+
 /--
 See `makePrompts`.
 -/
-def makePromptsFewShot (context : String) (state : String) (pre proofStyle : String) : List String :=
+def makePromptsFewShot (_context : String) (state : String) (pre proofStyle : String) :
+    List String :=
   let style := proofStyleInstructions proofStyle
+  let prefixInstruction := tacticPrefixInstructions pre
   let p1 := s!"Given the Lean 4 tactic state, suggest a next tactic.
+{prefixInstruction}
 Here are some examples:
 
 Tactic state:
@@ -77,28 +88,30 @@ Tactic state:
 ---
 {state}
 ---
+[PREFIX]
+{pre}
+[/PREFIX]
 {style}
-Next tactic:
+Next tactic completion:
 ---
 {pre}"
-  let p2 := match pre with
-  | "" => context
-  | _  => p1
-
-  [p1, p2]
+  [p1]
 
 /--
 See `makePrompts`.
 -/
 def makePromptsInstruct (context : String) (state : String) (pre proofStyle : String) : List String :=
   let style := proofStyleInstructions proofStyle
+  let prefixInstruction := tacticPrefixInstructions pre
   let p1 := s!"/- You are proving a theorem in Lean 4.
 You are given the following information:
 - The file contents up to the current tactic, inside [CTX]...[/CTX]
 - The current proof state, inside [STATE]...[/STATE]
+- The tactic prefix, if any, inside [PREFIX]...[/PREFIX]
 
 Your task is to generate the next tactic in the proof.
 Put the next tactic inside [TAC]...[/TAC].
+{prefixInstruction}
 {style}
 -/
 [CTX]
@@ -107,8 +120,11 @@ Put the next tactic inside [TAC]...[/TAC].
 [STATE]
 {state}
 [/STATE]
+[PREFIX]
+{pre}
+[/PREFIX]
 [TAC]
-{pre}"
+"
   [p1]
 
 /--
@@ -116,14 +132,17 @@ See `makePrompts`.
 -/
 def makePromptsReasoning (context : String) (state : String) (pre proofStyle : String) : List String :=
   let style := proofStyleInstructions proofStyle
+  let prefixInstruction := tacticPrefixInstructions pre
   let p1 := s!"/- You are proving a theorem in Lean 4.
 You are given the following information:
 - The file contents up to the current tactic, inside [CTX]...[/CTX]
 - The current proof state, inside [STATE]...[/STATE]
+- The tactic prefix, if any, inside [PREFIX]...[/PREFIX]
 
 Your task is to generate the next tactic in the proof.
 Put the next tactic inside [TAC]...[/TAC].
-If you find it helpful, you can precede the proof with brief thoughts inside [THOUGHTS]...[/THOUGHTS]
+If you find it helpful, you can precede the tactic with brief thoughts inside [THOUGHTS]...[/THOUGHTS]
+{prefixInstruction}
 In summary, your output should be of the form:
 [THOUGHTS]
 ...
@@ -139,8 +158,11 @@ In summary, your output should be of the form:
 [STATE]
 {state}
 [/STATE]
+[PREFIX]
+{pre}
+[/PREFIX]
 [THOUGHTS]
-{pre}"
+"
   [p1]
 
 /--
@@ -185,26 +207,44 @@ def makePromptsTacticState (_context : String) (state : String) (_pre: String) :
 See `makeQedPrompts`.
 TODO implement
 -/
-def makeQedPromptsFewShot (context : String) (_state proofStyle : String) : List String :=
-  let p1 := context ++ proofStyleInstructions proofStyle
+def makeQedPromptsFewShot (context : String) (state proofStyle : String) : List String :=
+  let style := proofStyleInstructions proofStyle
+  let p1 := s!"Given the Lean 4 context and tactic state, complete the proof.
+Put only the proof script inside [PROOF]...[/PROOF].
+Do not include comments, markdown, or explanatory text inside [PROOF].
+{style}
+
+[CTX]
+{context}
+[/CTX]
+[STATE]
+{state}
+[/STATE]
+[PROOF]"
   [p1]
 
 /--
 See `makeQedPrompts`.
 -/
-def makeQedPromptsInstruct (context : String) (_state proofStyle : String) : List String :=
+def makeQedPromptsInstruct (context : String) (state proofStyle : String) : List String :=
   let style := proofStyleInstructions proofStyle
   let p1 := s!"/- You are proving a theorem in Lean 4.
 You are given the following information:
-- The current file contents up to and including the theorem statement, inside [CTX]...[/CTX]
+- The file contents up to the current tactic, inside [CTX]...[/CTX]
+- The current proof state, inside [STATE]...[/STATE]
 
 Your task is to generate the proof.
 Put the proof inside [PROOF]...[/PROOF]
+The proof should be a normal Lean tactic script.
+Do not include comments, markdown, or explanatory text inside [PROOF].
 {style}
 -/
 [CTX]
 {context}
 [/CTX]
+[STATE]
+{state}
+[/STATE]
 [PROOF]"
   [p1]
 
@@ -219,7 +259,7 @@ You are given the following information:
 - The current proof state, inside [STATE]...[/STATE]
 
 Your task is to generate the rest of the proof.
-Put the generation inside [PROOF]...[/PROOF].
+Put the proof script inside [PROOF]...[/PROOF].
 If you find it helpful, you can precede the proof with brief thoughts inside [THOUGHTS]...[/THOUGHTS]
 In summary, your output should be of the form:
 [THOUGHTS]
@@ -228,10 +268,8 @@ In summary, your output should be of the form:
 [PROOF]
 ...
 [/PROOF]
-Your proof will be checked by combining each line with a ; combinator and checking
-the resulting combined tactic.
-Therefore, make sure the proof is formatted as one tactic per line,
-with no additional comments or text.
+The proof should be a normal Lean tactic script. Use one tactic per line when that is clearer.
+Do not include comments, markdown, or explanatory text inside [PROOF].
 {style}
 -/
 [CTX]
@@ -303,20 +341,30 @@ def makeQedPrompts
   | PromptKind.MarkdownReasoning => makeQedPromptsMarkdownReasoning context state proofStyle
   | PromptKind.TacticState => makePromptsTacticState context state ""
 
-def makeQedRefinementPromptsFewShot (context : String) (_state : String)
+def makeQedRefinementPromptsFewShot (context : String) (state : String)
     (previousAttempt : String) (errorMsg proofStyle : String) : List String :=
   let style := proofStyleInstructions proofStyle
-  let p1 := s!"/- Previous proof attempt failed.
-Error: {errorMsg}
-
-Previous attempt:
-{previousAttempt}
-
-Please try a different approach.
+  let p1 := s!"Previous proof attempt failed.
+Use the error and previous attempt to produce a corrected proof.
+Put only the corrected proof script inside [PROOF]...[/PROOF].
+Do not include comments, markdown, or explanatory text inside [PROOF].
 {style}
--/
-{context}"
+
+[ERROR]
+{errorMsg}
+[/ERROR]
+[PREVIOUS_PROOF]
+{previousAttempt}
+[/PREVIOUS_PROOF]
+[CTX]
+{context}
+[/CTX]
+[STATE]
+{state}
+[/STATE]
+[PROOF]"
   [p1]
+
 
 def makeQedRefinementPromptsInstruct (context : String) (state : String)
     (previousAttempt : String) (errorMsg proofStyle : String) : List String :=

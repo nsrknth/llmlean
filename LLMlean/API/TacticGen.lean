@@ -148,6 +148,8 @@ def codexMultiTacticPrompt (prompt : String) (numSamples : Nat) : String :=
 
 For this Codex app-server request, return up to {numSamples} distinct candidate next tactics.
 Put each candidate in its own [TAC]...[/TAC] block.
+Respect any [PREFIX] instruction in the prompt; if a prefix is present, each [TAC] block must
+contain only the suffix to append after that prefix.
 Do not include explanations or comments inside [TAC] blocks."
 
 def tacticGenerationCodex (pfx : String) (prompts : List String)
