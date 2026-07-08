@@ -75,6 +75,10 @@ def turnOutcomeError : TurnOutcome → String
   | .inputRequired _ => "Codex app-server turn requires input or approval"
   | .timedOut => "Codex app-server turn timed out"
 
+def busyError : String :=
+  "Codex app-server session is already running a turn; wait for it to finish or use " ++
+    "#llmlean_codex_reset if it is stale"
+
 def startSession (command : String) (options : Options) (key : SessionKey) : IO LiveSession := do
   let startedAt ← IO.monoMsNow
   debugPrint options s!"starting persistent app-server command={command}, cwd={key.cwd}"
@@ -149,7 +153,7 @@ def runTurn (session : LiveSession) (prompt : String) (options : Options) :
       throw <| IO.userError (turnOutcomeError outcome)
 
 def runPrompt (command : String) (prompt : String) (options : Options) : IO String := do
-  sessionMutex.atomically fun ref => do
+  let some result ← sessionMutex.tryAtomically (fun ref => do
     let current ← ref.get
     let session ← ensureSession command options current
     try
@@ -160,7 +164,9 @@ def runPrompt (command : String) (prompt : String) (options : Options) : IO Stri
       debugPrint options s!"terminating persistent app-server after turn error: {error}"
       session.server.terminate
       ref.set none
-      throw error
+      throw error)
+    | throw <| IO.userError busyError
+  return result
 
 def stopCurrentSession : IO Unit := do
   sessionMutex.atomically fun ref => do

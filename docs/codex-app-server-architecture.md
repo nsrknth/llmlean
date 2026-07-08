@@ -264,7 +264,7 @@ structure LiveSession where
 The current manager uses a `Std.Mutex (Option LiveSession)`. Its behavior is:
 
 - at most one active turn per live session unless app-server concurrency is explicitly supported
-- concurrent tactic elaborations are serialized or receive a clear "Codex busy" error
+- concurrent tactic elaborations receive a clear "Codex busy" error instead of silently queuing
 - session replacement terminates the old process
 - process exit is detected and clears the stored session
 - a manual restart option can force a new process and thread
@@ -506,7 +506,9 @@ Deliverables:
 
 - keep live experiments under `LLMleanTest/Manual` (implemented for current smokes)
 - document that default builds should not execute live Codex tactics (implemented)
-- clearer errors for "Codex busy", timeout, process exit, and required input
+- clearer errors for timeout, process exit, and required input
+- non-blocking busy handling for overlapping persistent turns
+  (implemented and covered by `Manual/CodexPersistentBusySmoke.lean`)
 - reader/queue transport so turn timeouts can interrupt silent app-server sessions reliably
   (implemented and covered by `Manual/CodexPersistentTimeoutSmoke.lean`)
 - optional idle timeout

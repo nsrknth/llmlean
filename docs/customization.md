@@ -77,6 +77,9 @@ Lean commands:
 Use `#llmlean_codex_reset` to stop the currently cached app-server process/thread. The next
 Codex-backed `llmstep` or `llmqed` starts a fresh session.
 
+If another Codex tactic is already running in the same Lean process, a second persistent Codex
+request fails fast with a "session is already running a turn" error instead of waiting behind it.
+
 With `llmlean.verbose = true`, the Codex path logs whether the session was started or reused,
 request timings, raw response text, parsed suggestion counts, validation results, and displayed
 suggestion counts.
