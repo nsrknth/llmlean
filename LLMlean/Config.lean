@@ -87,6 +87,16 @@ register_option llmlean.codexTurnTimeoutMs : Nat := {
   descr := s!"If nonzero, Codex app-server turn timeout in milliseconds (default: {defaultCodexTurnTimeoutMs})"
 }
 
+register_option llmlean.codexCache : Bool := {
+  defValue := true,
+  descr := "Cache Codex app-server responses for identical prompts within the current Lean process"
+}
+
+register_option llmlean.validateSuggestions : Bool := {
+  defValue := true,
+  descr := "Validate LLM suggestions before showing them in the Infoview"
+}
+
 
 def getConfigPath : IO (Option System.FilePath) := do
   let home ← IO.getEnv "HOME"
@@ -116,8 +126,7 @@ open Lake Toml
 
 /-- Access a value from the `config.toml` file, or print errors. -/
 def getFromConfigFile (key : Name) : IO (Option String) := do
-  let table ← getConfigTable
-  let table := table.get!
+  let some table ← getConfigTable | return none
   let result := EStateM.run (s := #[]) do
     let value : Option String ← table.decode? key
     return value
@@ -271,6 +280,12 @@ def getCodexTurnTimeoutMs : CoreM Nat := do
         | none => return defaultCodexTurnTimeoutMs
       | none => return defaultCodexTurnTimeoutMs
   | timeout => return timeout
+
+def getCodexCache : CoreM Bool := do
+  return llmlean.codexCache.get (← getOptions)
+
+def getValidateSuggestions : CoreM Bool := do
+  return llmlean.validateSuggestions.get (← getOptions)
 
 
 /-!
@@ -452,7 +467,7 @@ def getDefaultsForAPI (apiKind : APIKind) (tactic : TacticKind) : APIDefaults :=
       mode := GenerationMode.Parallel
       promptKind := PromptKind.Reasoning
       responseFormat := ResponseFormat.Markdown
-      numSamples := 1
+      numSamples := 3
       maxTokens := 512
       endpoint := ""
     }

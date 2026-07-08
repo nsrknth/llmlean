@@ -17,6 +17,60 @@ def splitTac (text : String) : String :=
   | some s => s.trim
   | none => text.trim
 
+def firstNonemptyLine (text : String) : String :=
+  ((text.splitOn "\n").map (fun line => line.trim)).filter (fun line => line.length > 0)
+    |>.headD ""
+
+def startsWithAny (line : String) (prefixes : List String) : Bool :=
+  prefixes.any fun pfx => line.startsWith pfx
+
+def containsSubstring (text : String) (needle : String) : Bool :=
+  (text.splitOn needle).length > 1
+
+def isLikelyLeanTactic (candidate : String) : Bool :=
+  let text := candidate.trim
+  let first := firstNonemptyLine text
+  text.length > 0
+    && !(containsSubstring text "```")
+    && !(containsSubstring text "[TAC]")
+    && !(containsSubstring text "[/TAC]")
+    && startsWithAny first [
+      "all_goals", "apply", "assumption", "aesop", "by_cases", "by_contra", "calc",
+      "cases", "change", "constructor", "contradiction", "dsimp", "exact", "ext",
+      "first", "funext", "have", "intro", "left", "let", "linarith", "norm_num",
+      "omega", "rcases", "refine", "rename_i", "rfl", "right", "ring", "rintro",
+      "rw", "simp", "simpa", "subst", "tauto", "unfold", "use"
+    ]
+
+def fallbackTacticCandidates (text : String) : Array String := Id.run do
+  let mut results : Array String := #[]
+  for block in getMarkdownLeanCodeBlocks text do
+    let block := block.trim
+    if isLikelyLeanTactic block then
+      results := results.push block
+  if !results.isEmpty then
+    return results
+  let tactic := splitTac text
+  if isLikelyLeanTactic tactic then
+    return #[tactic.trim]
+  else
+    return #[]
+
+def splitTacs (text : String) : Array String := Id.run do
+  let parts := (text.splitOn "[TAC]").tailD []
+  let mut results : Array String := #[]
+  for part in parts do
+    match (part.splitOn "[/TAC]").head? with
+    | some tactic =>
+        let tactic := tactic.trim
+        if tactic.length > 0 then
+          results := results.push tactic
+    | none => pure ()
+  if results.isEmpty then
+    return fallbackTacticCandidates text
+  else
+    return results
+
 /-!
 ## Open AI
 -/
@@ -86,16 +140,36 @@ def tacticGenerationAnthropic (pfx : String) (prompts : List String)
 def codexTacticModel? (api : API) : Option String :=
   if api.model.trim == "" then none else some api.model
 
+def codexMultiTacticPrompt (prompt : String) (numSamples : Nat) : String :=
+  if numSamples <= 1 then
+    prompt
+  else
+    prompt ++ s!"
+
+For this Codex app-server request, return up to {numSamples} distinct candidate next tactics.
+Put each candidate in its own [TAC]...[/TAC] block.
+Do not include explanations or comments inside [TAC] blocks."
+
 def tacticGenerationCodex (pfx : String) (prompts : List String)
-(api : API) : CoreM $ Array (String × Float) := do
+(api : API) (options : ChatGenerationOptions) : CoreM $ Array (String × Float) := do
   let some prompt := prompts.head?
     | return #[]
+  Config.verbosePrint s!"Codex llmstep requested up to {options.numSamples} tactic(s)"
+  let prompt := codexMultiTacticPrompt prompt options.numSamples
+  Config.verbosePrint s!"Codex prompt length: {prompt.length} characters"
   let response ← LLMlean.Codex.Completion.runConfiguredPrompt prompt (codexTacticModel? api)
-  let tactic := pfx ++ splitTac response
-  if filterGeneration tactic then
-    return #[(tactic, 1.0)]
-  else
-    return #[]
+  Config.verbosePrint s!"Codex raw response:\n{response}"
+  let parsedTactics := splitTacs response
+  Config.verbosePrint s!"Codex parsed {parsedTactics.size} tactic block(s)"
+  for tactic in parsedTactics do
+    Config.verbosePrint s!"Parsed tactic:\n{tactic}"
+  let mut results : Std.HashSet String := Std.HashSet.emptyWithCapacity
+  for tactic in parsedTactics do
+    let tactic := pfx ++ tactic
+    if filterGeneration tactic then
+      results := results.insert tactic
+  Config.verbosePrint s!"Codex kept {results.size} tactic(s) after filtering"
+  return results.toArray.map fun tactic => (tactic, 1.0)
 
 /-!
 ## Ollama
@@ -235,6 +309,6 @@ def LLMlean.Config.API.tacticGeneration
     | APIKind.Anthropic =>
       tacticGenerationAnthropic «prefix» prompts api options
     | APIKind.Codex =>
-      tacticGenerationCodex «prefix» prompts api
+      tacticGenerationCodex «prefix» prompts api options
 
 end LLMlean

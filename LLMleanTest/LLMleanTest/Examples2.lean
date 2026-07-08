@@ -3,6 +3,15 @@ import Mathlib.Data.Set.Function
 import Mathlib.Analysis.SpecialFunctions.Log.Basic
 import LLMlean
 
+set_option llmlean.api "codex"
+set_option llmlean.numSamples 3
+set_option llmlean.verbose true
+set_option llmlean.validateSuggestions true
+-- set_option llmlean.codexCommand "codex app-server"
+-- set_option llmlean.codexReadTimeoutMs 10000
+-- set_option llmlean.codexTurnTimeoutMs 180000
+
+
 section
 
 variable {α β : Type*}
@@ -134,15 +143,21 @@ def inverse (f : α → β) : β → α := fun y : β ↦
   if h : ∃ x, f x = y then Classical.choose h else default
 
 theorem inverse_spec {f : α → β} (y : β) (h : ∃ x, f x = y) : f (inverse f y) = y := by
-  rw [inverse, dif_pos h]
+  unfold inverse
+  rw [dif_pos h]
   exact Classical.choose_spec h
+  -- unfold inverse
+  -- rw [dif_pos h]
+  -- exact Classical.choose_spec h
+  -- rw [inverse, dif_pos h]
+  -- exact Classical.choose_spec h
 
 variable (f : α → β)
 
 open Function
 
 example : Injective f ↔ LeftInverse (inverse f) f := by
-  sorry
+  exact ⟨fun hf x ↦ hf (inverse_spec (f := f) (f x) ⟨x, rfl⟩), fun h x y hxy ↦ by rw [← h x, hxy, h y]⟩
 
 example : Surjective f ↔ RightInverse (inverse f) f :=
   sorry
@@ -154,16 +169,19 @@ variable {α : Type*}
 open Function
 
 theorem Cantor : ∀ f : α → Set α, ¬Surjective f := by
-  intro f surjf
-  let S := { i | i ∉ f i }
-  rcases surjf S with ⟨j, h⟩
-  have h₁ : j ∉ f j := by
-    intro h'
-    have : j ∉ f j := by rwa [h] at h'
-    contradiction
-  have h₂ : j ∈ S := by sorry
-  have h₃ : j ∉ S := by sorry
-  contradiction
+  llmqed
+  -- exact fun f hf => let S : Set α := {x | x ∉ f x}; let a : α := Classical.choose (hf S); let ha : f a = S := Classical.choose_spec (hf S); let hmem_eq : (a ∈ f a) = (a ∈ S) := congrArg (fun T : Set α => a ∈ T) ha; let hn : a ∉ f a := fun hm => (Eq.mp hmem_eq hm) hm; hn (Eq.mpr hmem_eq hn)
+  -- exact fun f hf => by let S : Set α := {x | x ∉ f x}; rcases hf S with ⟨a, ha⟩; have h : a ∈ S ↔ a ∉ S := (by change a ∉ f a ↔ a ∉ S; rw [ha]); exact iff_not_self h
+  -- intro f surjf
+  -- let S := { i | i ∉ f i }
+  -- rcases surjf S with ⟨j, h⟩
+  -- have h₁ : j ∉ f j := by
+  --   intro h'
+  --   have : j ∉ f j := by rwa [h] at h'
+  --   contradiction
+  -- have h₂ : j ∈ S := by sorry
+  -- have h₃ : j ∉ S := by sorry
+  -- contradiction
 
 -- COMMENTS: TODO: improve this
 end

@@ -53,28 +53,41 @@ def AppServer.send (server : AppServer) (message : Json) : IO Unit := do
 def readLineBlocking (server : AppServer) : IO String :=
   server.child.stdout.getLine
 
-/--
-Reads one stdout line with a timeout. If this returns `none`, the blocked read task may still be
-waiting on the process pipe; callers should terminate the app-server before reusing the client.
--/
+def AppServer.readStderrBestEffort (server : AppServer) : IO String := do
+  try
+    return (← server.child.stderr.readToEnd).trim
+  catch _ =>
+    return ""
+
+def AppServer.exitedError? (server : AppServer) : IO (Option String) := do
+  try
+    match ← server.child.tryWait with
+    | none => return none
+    | some exitCode =>
+        let stderr ← server.readStderrBestEffort
+        let detail :=
+          if stderr.isEmpty then
+            ""
+          else
+            s!": {stderr}"
+        return some s!"Codex app-server exited with code {exitCode}{detail}"
+  catch error =>
+    let stderr ← server.readStderrBestEffort
+    let detail :=
+      if stderr.isEmpty then
+        ""
+      else
+        s!": {stderr}"
+    return some s!"Codex app-server exited before it produced a JSON response ({error}){detail}"
+
 def readLineWithTimeout (server : AppServer) (timeoutMs : Nat) : IO (Option String) := do
-  if timeoutMs == 0 then
+  let _ := timeoutMs
+  try
     return some (← readLineBlocking server)
-  else
-    let lineTask ← IO.asTask
-      (do
-        let line ← readLineBlocking server
-        return LineRead.line line)
-      Task.Priority.dedicated
-    let timeoutTask ← IO.asTask
-      (do
-        IO.sleep (ms := timeoutMs.toUInt32)
-        return LineRead.timeout)
-      Task.Priority.dedicated
-    match ← IO.waitAny [lineTask, timeoutTask] with
-    | .ok (.line line) => return some line
-    | .ok .timeout => return none
-    | .error error => throw error
+  catch error =>
+    match ← server.exitedError? with
+    | some message => throw <| IO.userError message
+    | none => throw error
 
 def parseMessage (line : String) : Except String Json :=
   Json.parse line
@@ -88,6 +101,10 @@ def AppServer.readMessage (server : AppServer) : IO Json := do
 def AppServer.tryReadMessage (server : AppServer) (timeoutMs : Nat) : IO (Option Json) := do
   let some line ← readLineWithTimeout server timeoutMs
     | return none
+  if line.trim.isEmpty then
+    match ← server.exitedError? with
+    | some message => throw <| IO.userError message
+    | none => pure ()
   match parseMessage line with
   | .ok message => return some message
   | .error _ => return some (Json.mkObj [
@@ -120,7 +137,10 @@ partial def awaitResponseLoop
       else
         pure (timeoutMs - elapsed)
   let some message ← server.tryReadMessage readTimeout
-    | throw <| IO.userError (timeoutMessage requestId timeoutMs)
+    | do
+        match ← server.exitedError? with
+        | some message => throw <| IO.userError message
+        | none => throw <| IO.userError (timeoutMessage requestId timeoutMs)
   match errorFor? requestId message with
   | some error => throw <| IO.userError (rpcErrorMessage error)
   | none =>
@@ -272,9 +292,12 @@ def TurnOutcome.finalText? : TurnOutcome → Option String
   | _ => none
 
 def AppServer.terminate (server : AppServer) : IO Unit := do
-  match ← server.child.tryWait with
-  | some _ => pure ()
-  | none => server.child.kill
+  try
+    match ← server.child.tryWait with
+    | some _ => pure ()
+    | none => server.child.kill
+  catch _ =>
+    pure ()
 
 def AppServer.wait (server : AppServer) : IO UInt32 :=
   server.child.wait

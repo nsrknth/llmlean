@@ -1,6 +1,11 @@
 import Mathlib
 import LLMlean
 
+set_option llmlean.api "codex"
+set_option llmlean.codexCommand "codex app-server"
+set_option llmlean.codexReadTimeoutMs 10000
+set_option llmlean.codexTurnTimeoutMs 180000
+
 example {α : Type _} (r s t : Set α) : r ⊆ s → s ⊆ t → r ⊆ t := by
   sorry
 

@@ -158,6 +158,10 @@ def iterativeRefinementProofInTactic (tacticState : String) (context : String)
       Config.verbosePrint "⚠ Valid tactic but proof not complete, continuing..."
       Config.verbosePrint s!"Reason: {checkResult.errorMsg}"
       ctx := { ctx with previousAttempts := (proof, checkResult.errorMsg) :: ctx.previousAttempts }
+    | CheckResult.Unchecked =>
+      Config.verbosePrint "Unchecked proof attempt, continuing..."
+      Config.verbosePrint s!"Reason: {checkResult.errorMsg}"
+      ctx := { ctx with previousAttempts := (proof, checkResult.errorMsg) :: ctx.previousAttempts }
     | CheckResult.Invalid =>
       Config.verbosePrint "✗ Invalid proof, continuing..."
       Config.verbosePrint s!"Error: {checkResult.errorMsg}"

@@ -61,7 +61,16 @@ def addSuggestions' (tacRef : Syntax) (suggestions: Array (String × Float))
     let start := String.findLineStart map.source tacticRange.start
     let body := map.source.findAux (· ≠ ' ') tacticRange.start start
 
-    let checks ← suggestions.mapM checkSuggestion'
+    let validate ← Config.getValidateSuggestions
+    let checks ←
+      if validate then
+        suggestions.mapM checkSuggestion'
+      else
+        pure <| suggestions.map fun _ => CheckResult.Unchecked
+    Config.verbosePrint s!"llmqed validation enabled: {validate}"
+    for suggestionAndCheck in suggestions.zip checks do
+      Config.verbosePrint
+        s!"llmqed suggestion ({repr suggestionAndCheck.2}):\n{suggestionAndCheck.1}"
     let texts : Array String := suggestions.map fun text =>
       formatSuggestion text body start (tacticRange.start - start).1
 
@@ -70,7 +79,12 @@ def addSuggestions' (tacRef : Syntax) (suggestions: Array (String × Float))
         match x.2 with
         | CheckResult.ProofDone => true
         | CheckResult.Valid => true
+        | CheckResult.Unchecked => true
         | CheckResult.Invalid => false
+    Config.verbosePrint s!"llmqed displaying {textsAndChecks.size} suggestion(s)"
+    for suggestionAndCheck in textsAndChecks do
+      Config.verbosePrint
+        s!"llmqed displayed ({repr suggestionAndCheck.2}):\n{suggestionAndCheck.1}"
 
     let start := (tacRef.getRange?.getD tacticRange).start
     let stop := (tacRef.getRange?.getD tacticRange).stop

@@ -355,13 +355,7 @@ The thread should be scoped to the current Lean project.
   "params": {
     "cwd": "/absolute/path/to/project",
     "model": "optional-model-from-config",
-    "approvalPolicy": {
-      "reject": {
-        "sandbox_approval": true,
-        "rules": true,
-        "mcp_elicitations": true
-      }
-    },
+    "approvalPolicy": "never",
     "sandbox": "read-only",
     "dynamicTools": [
       {
@@ -374,8 +368,10 @@ The thread should be scoped to the current Lean project.
 }
 ```
 
-Use exact payload fields supported by the installed app-server schema. Do not hard-code a large
-local enum of policy shapes. Treat Codex-owned policy payloads as pass-through JSON.
+Use exact payload fields supported by the installed app-server schema. Current local app-server
+schemas accept string variants such as `untrusted`, `on-failure`, `on-request`, `granular`, and
+`never`; older object-form policies such as `{"reject": ...}` may be rejected. Do not hard-code a
+large local enum of policy shapes. Treat Codex-owned policy payloads as pass-through JSON.
 
 ### Turn Start
 

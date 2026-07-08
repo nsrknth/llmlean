@@ -70,15 +70,17 @@ export default function(props) {
 inductive CheckResult : Type
   | ProofDone
   | Valid
+  | Unchecked
   | Invalid
-  deriving ToJson, Ord, BEq
+  deriving ToJson, Ord, BEq, Repr
 
 /- Check whether the suggestion `s` completes the proof, is valid (does
 not result in an error message), or is invalid. -/
 def checkSuggestion (s: String) : Lean.Elab.Tactic.TacticM CheckResult := do
   withoutModifyingState do
   try
-    match Parser.runParserCategory (← getEnv) `tactic s with
+    let s' := "(" ++ (s.replace "\n" "\n ") ++ " )"
+    match Parser.runParserCategory (← getEnv) `tactic s' with
       | Except.ok stx =>
         try
           _ ← Lean.Elab.Tactic.evalTactic stx
@@ -108,7 +110,16 @@ def addSuggestions (tacRef : Syntax) (pfxRef: Syntax) (suggestions: Array (Strin
       let start := String.findLineStart map.source tacticRange.start
       let body := map.source.findAux (· ≠ ' ') tacticRange.start start
 
-      let checks ← suggestions.mapM checkSuggestion
+      let validate ← Config.getValidateSuggestions
+      let checks ←
+        if validate then
+          suggestions.mapM checkSuggestion
+        else
+          pure <| suggestions.map fun _ => CheckResult.Unchecked
+      Config.verbosePrint s!"llmstep validation enabled: {validate}"
+      for suggestionAndCheck in suggestions.zip checks do
+        Config.verbosePrint
+          s!"llmstep suggestion ({repr suggestionAndCheck.2}):\n{suggestionAndCheck.1}"
       let texts := suggestions.map fun text => (
         (Std.Format.pretty text.trim
          (indent := (body - start).1)
@@ -120,7 +131,12 @@ def addSuggestions (tacRef : Syntax) (pfxRef: Syntax) (suggestions: Array (Strin
           match x.2 with
           | CheckResult.ProofDone => true
           | CheckResult.Valid => true
+          | CheckResult.Unchecked => true
           | CheckResult.Invalid => false
+      Config.verbosePrint s!"llmstep displaying {textsAndChecks.size} suggestion(s)"
+      for suggestionAndCheck in textsAndChecks do
+        Config.verbosePrint
+          s!"llmstep displayed ({repr suggestionAndCheck.2}):\n{suggestionAndCheck.1}"
 
       let start := (tacRef.getRange?.getD tacticRange).start
       let stop := (pfxRef.getRange?.getD argRange).stop
