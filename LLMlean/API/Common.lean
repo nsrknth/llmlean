@@ -224,6 +224,8 @@ def printConfiguration (api : API) (tacticKind : TacticKind) (numSamples : Nat) 
     match api.kind with
     | APIKind.Codex =>
         Config.verbosePrint s!"  Reasoning Effort: {(← Config.getCodexEffort).getD "(default)"}"
+        Config.verbosePrint s!"  Codex Read Timeout: {← Config.getCodexReadTimeoutMs}ms"
+        Config.verbosePrint s!"  Codex Turn Timeout: {← Config.getCodexTurnTimeoutMs}ms"
     | _ =>
         Config.verbosePrint s!"  Endpoint: {api.baseUrl}"
     Config.verbosePrint s!"  Prompt Kind: {repr api.promptKind}"

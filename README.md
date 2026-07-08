@@ -146,6 +146,12 @@ automation:
 set_option llmlean.proofStyle "tutorial"
 ```
 
+For Codex app-server, long or difficult proof searches can exceed the default turn timeout of
+120 seconds. Increase it per file or section when needed:
+```lean
+set_option llmlean.codexTurnTimeoutMs 300000  -- 5 minutes
+```
+
 *For the best performance, especially for the `llmqed` tactic, we recommend using Anthropic Claude with iterative refinement mode.*
 
 

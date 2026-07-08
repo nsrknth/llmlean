@@ -146,6 +146,8 @@ def runConfiguredPrompt (prompt : String) (model : Option String := none) : Core
   }
   debugPrint options
     s!"turn config: model={options.model.getD "(default)"}, effort={options.effort.getD "(default)"}"
+  debugPrint options
+    s!"turn timeouts: readTimeoutMs={options.readTimeoutMs}, turnTimeoutMs={options.turnTimeoutMs}"
   runPrompt command prompt options
 
 end LLMlean.Codex.Completion

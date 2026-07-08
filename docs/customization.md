@@ -87,11 +87,17 @@ Lean commands:
 set_option llmlean.model "gpt-5.5"
 set_option llmlean.codexEffort "xhigh"
 set_option llmlean.proofStyle "tutorial"
+set_option llmlean.codexTurnTimeoutMs 300000
 
 #llmlean_codex_models
 #llmlean_codex_status
 #llmlean_codex_reset
 ```
+
+`llmlean.codexTurnTimeoutMs` is the per-turn wait before LLMLean reports a Codex app-server
+timeout. The value is in milliseconds; `300000` is 5 minutes. Use
+`llmlean.codexReadTimeoutMs` only for app-server protocol handshakes such as initialization and
+`thread/start`.
 
 Use `#llmlean_codex_reset` to stop the currently cached app-server process/thread. The next
 Codex-backed `llmstep` or `llmqed` starts a fresh session.
