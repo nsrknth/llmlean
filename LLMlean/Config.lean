@@ -42,6 +42,11 @@ register_option llmlean.prompt : String := {
   descr := "If set, prompt kind for the LLM (e.g. fewshot, reasoning, instruction)"
 }
 
+register_option llmlean.proofStyle : String := {
+  defValue := "",
+  descr := "If set, proof style guidance for generated tactics/proofs (e.g. tutorial, automation, default)"
+}
+
 register_option llmlean.apiKey : String := {
   defValue := "",
   descr := "If set, API key for the LLM service"
@@ -174,6 +179,17 @@ def getPromptKind : CoreM (Option String) := do
     | none => getFromConfigFile `prompt
     | some prompt => return some prompt
   | prompt => return some prompt
+
+def getProofStyle : CoreM String := do
+  match llmlean.proofStyle.get (← getOptions) with
+  | "" =>
+    match ← IO.getEnv "LLMLEAN_PROOF_STYLE" with
+    | none =>
+      match ← getFromConfigFile `proofStyle with
+      | none => return "default"
+      | some style => return style
+    | some style => return style
+  | style => return style
 
 def getApiKey : CoreM (Option String) := do
   match llmlean.apiKey.get (← getOptions) with

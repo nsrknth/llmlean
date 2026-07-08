@@ -306,7 +306,7 @@ Generates a list of tactics using the LLM API.
 def LLMlean.Config.API.tacticGeneration
   (api : API) (tacticState : String) (context : String)
   («prefix» : String) : CoreM $ Array (String × Float) := do
-  let prompts := makePrompts api.promptKind context tacticState «prefix»
+  let prompts := makePrompts api.promptKind context tacticState «prefix» (← Config.getProofStyle)
   let options ← getChatGenerationOptions api TacticKind.LLMStep
   match api.kind with
     | APIKind.Ollama =>

@@ -5,10 +5,34 @@ open LLMlean.Config
 
 namespace LLMlean
 
+def proofStyleInstructions (style : String) : String :=
+  match style with
+  | "" | "default" => ""
+  | "tutorial" | "teaching" => s!"
+Proof style guidance:
+- Prefer readable tutorial-style Lean proof scripts over black-box automation when a short
+  structural proof is available.
+- Prefer local hypotheses, local definitions, constructors, and tactics such as intro, intros,
+  exact, apply, assumption, constructor, cases, induction, rw, simp, and simpa.
+- Avoid using decide, omega, aesop, grind, norm_num, linarith, ring, positivity, or other broad
+  automation as the first choice for simple tutorial goals.
+- If multiple candidates are requested, make them genuinely distinct and include at least one
+  step-by-step proof candidate."
+  | "automation" => s!"
+Proof style guidance:
+- Prefer short robust automation when it closes the goal.
+- Good candidates include simp, simpa, aesop, grind, omega, norm_num, linarith, ring, positivity,
+  and decide when appropriate.
+- If multiple candidates are requested, make them genuinely distinct."
+  | style => s!"
+Proof style guidance:
+- Follow this user-requested proof style: {style}."
+
 /--
 See `makePrompts`.
 -/
-def makePromptsFewShot (context : String) (state : String) (pre: String) : List String :=
+def makePromptsFewShot (context : String) (state : String) (pre proofStyle : String) : List String :=
+  let style := proofStyleInstructions proofStyle
   let p1 := s!"Given the Lean 4 tactic state, suggest a next tactic.
 Here are some examples:
 
@@ -53,6 +77,7 @@ Tactic state:
 ---
 {state}
 ---
+{style}
 Next tactic:
 ---
 {pre}"
@@ -65,7 +90,8 @@ Next tactic:
 /--
 See `makePrompts`.
 -/
-def makePromptsInstruct (context : String) (state : String) (pre: String) : List String :=
+def makePromptsInstruct (context : String) (state : String) (pre proofStyle : String) : List String :=
+  let style := proofStyleInstructions proofStyle
   let p1 := s!"/- You are proving a theorem in Lean 4.
 You are given the following information:
 - The file contents up to the current tactic, inside [CTX]...[/CTX]
@@ -73,6 +99,7 @@ You are given the following information:
 
 Your task is to generate the next tactic in the proof.
 Put the next tactic inside [TAC]...[/TAC].
+{style}
 -/
 [CTX]
 {context}
@@ -87,7 +114,8 @@ Put the next tactic inside [TAC]...[/TAC].
 /--
 See `makePrompts`.
 -/
-def makePromptsReasoning (context : String) (state : String) (pre: String) : List String :=
+def makePromptsReasoning (context : String) (state : String) (pre proofStyle : String) : List String :=
+  let style := proofStyleInstructions proofStyle
   let p1 := s!"/- You are proving a theorem in Lean 4.
 You are given the following information:
 - The file contents up to the current tactic, inside [CTX]...[/CTX]
@@ -103,6 +131,7 @@ In summary, your output should be of the form:
 [TAC]
 ...
 [/TAC]
+{style}
 
 [CTX]
 {context}
@@ -117,7 +146,9 @@ In summary, your output should be of the form:
 /--
 See `makePrompts`.
 -/
-def makePromptsMarkdownReasoning (context : String) (state : String) (pre: String) : List String :=
+def makePromptsMarkdownReasoning
+    (context : String) (state : String) (pre proofStyle : String) : List String :=
+  let style := proofStyleInstructions proofStyle
   let p1 := s!"You are proving a theorem in Lean 4.
 You are given the following information:
 
@@ -133,6 +164,7 @@ The current proof state is as follows:
 Your task is to generate the next tactic in the proof.
 Generate this by writing a markdown file with the completed line, including the context of the file before it
 in a markdown code block.
+{style}
 
 If you find it helpful, you can precede the proof with brief thoughts. When you are done, end with </think>.
 
@@ -153,20 +185,22 @@ def makePromptsTacticState (_context : String) (state : String) (_pre: String) :
 See `makeQedPrompts`.
 TODO implement
 -/
-def makeQedPromptsFewShot (context : String) (_state : String) : List String :=
-  let p1 := context
+def makeQedPromptsFewShot (context : String) (_state proofStyle : String) : List String :=
+  let p1 := context ++ proofStyleInstructions proofStyle
   [p1]
 
 /--
 See `makeQedPrompts`.
 -/
-def makeQedPromptsInstruct (context : String) (_state : String) : List String :=
+def makeQedPromptsInstruct (context : String) (_state proofStyle : String) : List String :=
+  let style := proofStyleInstructions proofStyle
   let p1 := s!"/- You are proving a theorem in Lean 4.
 You are given the following information:
 - The current file contents up to and including the theorem statement, inside [CTX]...[/CTX]
 
 Your task is to generate the proof.
 Put the proof inside [PROOF]...[/PROOF]
+{style}
 -/
 [CTX]
 {context}
@@ -177,7 +211,8 @@ Put the proof inside [PROOF]...[/PROOF]
 /--
 See `makeQedPrompts`.
 -/
-def makeQedPromptsReasoning (context : String) (state : String) : List String :=
+def makeQedPromptsReasoning (context : String) (state proofStyle : String) : List String :=
+  let style := proofStyleInstructions proofStyle
   let p1 := s!"/- You are proving a theorem in Lean 4.
 You are given the following information:
 - The file contents up to the current tactic, inside [CTX]...[/CTX]
@@ -197,6 +232,7 @@ Your proof will be checked by combining each line with a ; combinator and checki
 the resulting combined tactic.
 Therefore, make sure the proof is formatted as one tactic per line,
 with no additional comments or text.
+{style}
 -/
 [CTX]
 {context}
@@ -210,7 +246,8 @@ with no additional comments or text.
 /--
 See `makeQedPrompts`.
 -/
-def makeQedPromptsMarkdownReasoning (context : String) (state : String) : List String :=
+def makeQedPromptsMarkdownReasoning (context : String) (state proofStyle : String) : List String :=
+  let style := proofStyleInstructions proofStyle
   let p1 := s!"You are proving a theorem in Lean 4.
 
 You are given the following information:
@@ -228,6 +265,7 @@ IMPORTANT: you must end by writing your full proof in the format:
 ```lean4
 <... your proof here...>
 ```
+{style}
 
 If you find it helpful, you can precede the proof with brief thoughts, outside the tactic blocks.
 IMPORTANT: Once you have written a complete proof, end with </think>.
@@ -240,12 +278,14 @@ given a `context` containing the file contents up to the tactic invocation,
 and a `state` containing the current proof state,
 and a `pre` string containing the prefix of the tactic to be generated.
 -/
-def makePrompts (promptKind : PromptKind) (context : String) (state : String) (pre: String) : List String :=
+def makePrompts
+    (promptKind : PromptKind) (context : String) (state : String) (pre proofStyle : String) :
+    List String :=
   match promptKind with
-  | PromptKind.FewShot => makePromptsFewShot context state pre
-  | PromptKind.Reasoning => makePromptsReasoning context state pre
-  | PromptKind.Instruction => makePromptsInstruct context state pre
-  | PromptKind.MarkdownReasoning => makePromptsMarkdownReasoning context state pre
+  | PromptKind.FewShot => makePromptsFewShot context state pre proofStyle
+  | PromptKind.Reasoning => makePromptsReasoning context state pre proofStyle
+  | PromptKind.Instruction => makePromptsInstruct context state pre proofStyle
+  | PromptKind.MarkdownReasoning => makePromptsMarkdownReasoning context state pre proofStyle
   | PromptKind.TacticState => makePromptsTacticState context state pre
 
 
@@ -254,16 +294,18 @@ Makes prompts for the complete proof generation,
 given a `context` containing the file contents up to the tactic invocation,
 and a `state` containing the current proof state.
 -/
-def makeQedPrompts (promptKind : PromptKind) (context : String) (state : String) : List String :=
+def makeQedPrompts
+    (promptKind : PromptKind) (context : String) (state proofStyle : String) : List String :=
   match promptKind with
-  | PromptKind.FewShot => makeQedPromptsFewShot context state
-  | PromptKind.Reasoning => makeQedPromptsReasoning context state
-  | PromptKind.Instruction => makeQedPromptsInstruct context state
-  | PromptKind.MarkdownReasoning => makeQedPromptsMarkdownReasoning context state
+  | PromptKind.FewShot => makeQedPromptsFewShot context state proofStyle
+  | PromptKind.Reasoning => makeQedPromptsReasoning context state proofStyle
+  | PromptKind.Instruction => makeQedPromptsInstruct context state proofStyle
+  | PromptKind.MarkdownReasoning => makeQedPromptsMarkdownReasoning context state proofStyle
   | PromptKind.TacticState => makePromptsTacticState context state ""
 
 def makeQedRefinementPromptsFewShot (context : String) (_state : String)
-    (previousAttempt : String) (errorMsg : String) : List String :=
+    (previousAttempt : String) (errorMsg proofStyle : String) : List String :=
+  let style := proofStyleInstructions proofStyle
   let p1 := s!"/- Previous proof attempt failed.
 Error: {errorMsg}
 
@@ -271,12 +313,14 @@ Previous attempt:
 {previousAttempt}
 
 Please try a different approach.
+{style}
 -/
 {context}"
   [p1]
 
 def makeQedRefinementPromptsInstruct (context : String) (state : String)
-    (previousAttempt : String) (errorMsg : String) : List String :=
+    (previousAttempt : String) (errorMsg proofStyle : String) : List String :=
+  let style := proofStyleInstructions proofStyle
   let p1 := s!"/- You are proving a theorem in Lean 4.
 Your previous proof attempt failed with the following error:
 {errorMsg}
@@ -288,6 +332,7 @@ Previous attempt:
 
 Please provide a corrected proof that addresses this error.
 Put the proof inside [PROOF]...[/PROOF]
+{style}
 -/
 [CTX]
 {context}
@@ -299,7 +344,8 @@ Put the proof inside [PROOF]...[/PROOF]
   [p1]
 
 def makeQedRefinementPromptsReasoning (context : String) (state : String)
-    (previousAttempt : String) (errorMsg : String) : List String :=
+    (previousAttempt : String) (errorMsg proofStyle : String) : List String :=
+  let style := proofStyleInstructions proofStyle
   let p1 := s!"/- You are proving a theorem in Lean 4.
 Your previous proof attempt failed with the following error:
 {errorMsg}
@@ -311,6 +357,7 @@ Please analyze what went wrong and provide a corrected proof.
 Put your analysis inside [THOUGHTS]...[/THOUGHTS] and the corrected proof inside [PROOF]...[/PROOF].
 Do not include any additional text outside these blocks.
 Write ONLY the proof inside of [PROOF]...[/PROOF]. For instance, do NOT write ```lean4 ... ```.
+{style}
 -/
 [CTX]
 {context}
@@ -322,7 +369,8 @@ Write ONLY the proof inside of [PROOF]...[/PROOF]. For instance, do NOT write ``
   [p1]
 
 def makeQedRefinementPromptsMarkdownReasoning (context : String) (state : String)
-    (previousAttempt : String) (errorMsg : String) : List String :=
+    (previousAttempt : String) (errorMsg proofStyle : String) : List String :=
+  let style := proofStyleInstructions proofStyle
   let p1 := s!"You are proving a theorem in Lean 4.
 
 Your previous proof attempt failed with the following error:
@@ -347,19 +395,24 @@ Write your thoughts about the error and then provide the complete corrected proo
 IMPORTANT: End with your corrected proof in the format:
 ```lean4
 <... your corrected proof here...>
-```"
+```
+{style}"
   [p1]
 
 /--
 Make refinement prompts for proof completion with error context
 -/
 def makeQedRefinementPrompts (promptKind : PromptKind) (context : String) (state : String)
-    (previousAttempt : String) (errorMsg : String) : List String :=
+    (previousAttempt : String) (errorMsg proofStyle : String) : List String :=
   match promptKind with
-  | PromptKind.FewShot => makeQedRefinementPromptsFewShot context state previousAttempt errorMsg
-  | PromptKind.Instruction => makeQedRefinementPromptsInstruct context state previousAttempt errorMsg
-  | PromptKind.Reasoning => makeQedRefinementPromptsReasoning context state previousAttempt errorMsg
-  | PromptKind.MarkdownReasoning => makeQedRefinementPromptsMarkdownReasoning context state previousAttempt errorMsg
+  | PromptKind.FewShot =>
+      makeQedRefinementPromptsFewShot context state previousAttempt errorMsg proofStyle
+  | PromptKind.Instruction =>
+      makeQedRefinementPromptsInstruct context state previousAttempt errorMsg proofStyle
+  | PromptKind.Reasoning =>
+      makeQedRefinementPromptsReasoning context state previousAttempt errorMsg proofStyle
+  | PromptKind.MarkdownReasoning =>
+      makeQedRefinementPromptsMarkdownReasoning context state previousAttempt errorMsg proofStyle
   | PromptKind.TacticState => makePromptsTacticState context state ""
 
 end LLMlean

@@ -140,6 +140,12 @@ Enable verbose output to see the refinement process:
 set_option llmlean.verbose true
 ```
 
+For tutorial-style files, you can ask LLMLean to prefer local, readable, stepwise proofs over broad
+automation:
+```lean
+set_option llmlean.proofStyle "tutorial"
+```
+
 *For the best performance, especially for the `llmqed` tactic, we recommend using Anthropic Claude with iterative refinement mode.*
 
 

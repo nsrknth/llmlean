@@ -97,6 +97,15 @@ def checkSuggestion (s: String) : Lean.Elab.Tactic.TacticM CheckResult := do
         pure CheckResult.Invalid
     catch _ => pure CheckResult.Invalid
 
+private def takeString (s : String) (n : Nat) : String :=
+  toString (s.take n)
+
+def sourcePrefixAt (source : String) (pos : Position) : String :=
+  let lines := source.splitOn "\n"
+  let previousLines := lines.take (pos.line - 1)
+  let currentLine := takeString (lines.getD (pos.line - 1) "") pos.column
+  String.intercalate "\n" (previousLines ++ [currentLine])
+
 
 /- Adds multiple suggestions to the Lean InfoView.
    Code based on `Std.Tactic.addSuggestion`. -/
@@ -107,8 +116,8 @@ def addSuggestions (tacRef : Syntax) (pfxRef: Syntax) (suggestions: Array (Strin
   if let some tacticRange := (origSpan?.getD tacRef).getRange? then
     if let some argRange := (origSpan?.getD pfxRef).getRange? then
       let map ← getFileMap
-      let start := String.findLineStart map.source tacticRange.start
-      let body := map.source.findAux (· ≠ ' ') tacticRange.start start
+      let (indent, column) := Lean.Meta.Tactic.TryThis.getIndentAndColumn map
+        { start := tacticRange.start, stop := argRange.stop }
 
       let validate ← Config.getValidateSuggestions
       let checks ←
@@ -127,8 +136,8 @@ def addSuggestions (tacRef : Syntax) (pfxRef: Syntax) (suggestions: Array (Strin
           s!"llmstep suggestion ({repr suggestionAndCheck.2}):\n{suggestionAndCheck.1}"
       let texts := suggestions.map fun text => (
         (Std.Format.pretty text.trim
-         (indent := (body - start).1)
-         (column := (tacticRange.start - start).1)
+         (indent := indent)
+         (column := column)
       ))
 
       let textsAndChecks := (texts.zip checks |>.qsort
@@ -151,9 +160,8 @@ def addSuggestions (tacRef : Syntax) (pfxRef: Syntax) (suggestions: Array (Strin
 
       { start := map.lineStart (map.toPosition start).line
         stop := map.lineStart ((map.toPosition stop).line + 1) }
-      let full_range : String.Range :=
-      { start := tacticRange.start, stop := argRange.stop }
-      let full_range := map.utf8RangeToLspRange full_range
+      let full_range := map.utf8RangeToLspRange
+        { start := tacticRange.start, stop := argRange.stop }
       let tactic := Std.Format.pretty f!"{tacRef.prettyPrint}{pfxRef.prettyPrint}"
       let json := Json.mkObj [
         ("tactic", tactic),
@@ -184,9 +192,10 @@ elab_rules : tactic
     match tac.getRange? with
     | some range =>
       -- Get the source context from the file from which the tactic was called.
-      let src := (← getFileMap).source
+      let map ← getFileMap
+      let src := map.source
       -- Extract the context, from the start of the file to the start of tactic call.
-      let ctx := src.extract src.toSubstring.startPos range.start
+      let ctx := sourcePrefixAt src (map.toPosition range.start)
       addSuggestions tac pfx (← liftMetaMAtMain (llmStep pfx.getString ctx))
     | none =>
       addSuggestions tac pfx (← liftMetaMAtMain (llmStep pfx.getString ""))

@@ -227,6 +227,7 @@ def printConfiguration (api : API) (tacticKind : TacticKind) (numSamples : Nat) 
     | _ =>
         Config.verbosePrint s!"  Endpoint: {api.baseUrl}"
     Config.verbosePrint s!"  Prompt Kind: {repr api.promptKind}"
+    Config.verbosePrint s!"  Proof Style: {← Config.getProofStyle}"
     Config.verbosePrint s!"  Response Format: {repr api.responseFormat}"
     Config.verbosePrint s!"  Mode: {repr mode}"
     Config.verbosePrint s!"  Number of Samples: {numSamples}"

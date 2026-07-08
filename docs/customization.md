@@ -16,6 +16,10 @@ Example:
 - `prompt`:
   - `fewshot`: for base models
   - `instruction`: for instruction-tuned models
+- `proofStyle`:
+  - `default`: prefer any valid proof
+  - `tutorial`: prefer readable local/stepwise proofs over broad automation when possible
+  - `automation`: prefer short automation-heavy proofs when they close the goal
 - `model`:
   - Example for Together API: `mistralai/Mixtral-8x7B-Instruct-v0.1`
   - Example for Open AI: `gpt-4o`
@@ -30,7 +34,7 @@ Example:
 - `verbose`:
   - `true`: Show detailed LLM interaction and refinement steps
 
-Set each variable in the configuration file, as indicated in [README](../README.md). Alternatively, set environment variables `LLMLEAN_API`, `LLMLEAN_API_KEY`, `LLMLEAN_ENDPOINT`, `LLMLEAN_PROMPT`, `LLMLEAN_MODEL`, `LLMLEAN_NUM_SAMPLES`, `LLMLEAN_MODE`, `LLMLEAN_MAX_ITERATIONS`, and `LLMLEAN_VERBOSE` respectively, or enter `set_option llmlean.<relevant-config> <value>` before `llmstep`/`llmqed` is called.
+Set each variable in the configuration file, as indicated in [README](../README.md). Alternatively, set environment variables `LLMLEAN_API`, `LLMLEAN_API_KEY`, `LLMLEAN_ENDPOINT`, `LLMLEAN_PROMPT`, `LLMLEAN_PROOF_STYLE`, `LLMLEAN_MODEL`, `LLMLEAN_NUM_SAMPLES`, `LLMLEAN_MODE`, `LLMLEAN_MAX_ITERATIONS`, and `LLMLEAN_VERBOSE` respectively, or enter `set_option llmlean.<relevant-config> <value>` before `llmstep`/`llmqed` is called.
 
 **Note on Iterative Refinement**: This mode works particularly well with models that can understand and learn from error messages. We recommend using instruction-tuned models with the `reasoning` prompt type for best results.
 
@@ -70,6 +74,7 @@ Environment variables:
 export LLMLEAN_API=codex
 export LLMLEAN_MODEL=gpt-5.5
 export LLMLEAN_CODEX_EFFORT=xhigh
+export LLMLEAN_PROOF_STYLE=tutorial
 export LLMLEAN_CODEX_COMMAND='codex app-server'
 export LLMLEAN_CODEX_READ_TIMEOUT_MS=5000
 export LLMLEAN_CODEX_TURN_TIMEOUT_MS=120000
@@ -81,6 +86,7 @@ Lean commands:
 ```lean
 set_option llmlean.model "gpt-5.5"
 set_option llmlean.codexEffort "xhigh"
+set_option llmlean.proofStyle "tutorial"
 
 #llmlean_codex_models
 #llmlean_codex_status

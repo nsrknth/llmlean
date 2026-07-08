@@ -16,14 +16,11 @@ def runTactic (goal ctx : String) : CoreM (Array (String × Float)) := do
   let s ← api.proofCompletion goal ctx
   return s
 
-def formatSuggestion (suggestion : String)
-    (body : String.Pos)
-    (start : String.Pos)
-    (column : Nat) :=
+def formatSuggestion (suggestion : String) (indent column : Nat) :=
   let lines := (suggestion.splitOn "\n")
-  let lines := [(lines.headD "").trim] ++ lines.tailD []
+  let lines := [toString ((lines.headD "").trim)] ++ lines.tailD []
   let lines := lines.map fun (line : String) =>
-    Std.Format.pretty line (indent := (body - start).1) (column := column)
+    Std.Format.pretty line (indent := indent) (column := column)
   "\n  ".intercalate lines
 
 /- Check whether the suggestion `s` completes the proof, is valid (does
@@ -58,8 +55,8 @@ def addSuggestions' (tacRef : Syntax) (suggestions: Array (String × Float))
   let suggestions := suggestions.map fun ⟨x, _⟩ => x
   if let some tacticRange := (origSpan?.getD tacRef).getRange? then
     let map ← getFileMap
-    let start := String.findLineStart map.source tacticRange.start
-    let body := map.source.findAux (· ≠ ' ') tacticRange.start start
+    let (indent, column) := Lean.Meta.Tactic.TryThis.getIndentAndColumn map
+      { start := tacticRange.start, stop := tacticRange.stop }
 
     let validate ← Config.getValidateSuggestions
     let checks ←
@@ -77,7 +74,7 @@ def addSuggestions' (tacRef : Syntax) (suggestions: Array (String × Float))
       Config.verbosePrint
         s!"llmqed suggestion ({repr suggestionAndCheck.2}):\n{suggestionAndCheck.1}"
     let texts : Array String := suggestions.map fun text =>
-      formatSuggestion text body start (tacticRange.start - start).1
+      formatSuggestion text indent column
 
     let textsAndChecks := (texts.zip checks |>.qsort
       fun a b => compare a.2 b.2 = Ordering.lt).filter fun x =>
@@ -99,9 +96,8 @@ def addSuggestions' (tacRef : Syntax) (suggestions: Array (String × Float))
 
     { start := map.lineStart (map.toPosition start).line
       stop := map.lineStart ((map.toPosition stop).line + 1) }
-    let full_range : String.Range :=
-    { start := tacticRange.start, stop := tacticRange.stop }
-    let full_range := map.utf8RangeToLspRange full_range
+    let full_range := map.utf8RangeToLspRange
+      { start := tacticRange.start, stop := tacticRange.stop }
     let tactic := Std.Format.pretty f!"{tacRef.prettyPrint}"
     let json := Json.mkObj [
       ("tactic", tactic),
@@ -137,8 +133,8 @@ elab_rules : tactic
   | `(tactic | llmqed%$tac) => do
     match tac.getRange? with
     | some range =>
-      let src := (← getFileMap).source
-      let ctx := src.extract src.toSubstring.startPos range.start
+      let map ← getFileMap
+      let ctx := sourcePrefixAt map.source (map.toPosition range.start)
       -- Check which mode to use
       let mode ← Config.getModeEnum
       let modeStr ← Config.getMode
