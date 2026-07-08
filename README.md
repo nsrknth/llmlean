@@ -4,6 +4,8 @@ LLMlean integrates LLMs and Lean for tactic suggestions, proof completion, and m
 
 ## News
 
+- **07/2026**: Added experimental Codex app-server support with persistent app-server sessions,
+  app-server model/effort configuration, and dynamic-tool routing.
 - **10/2025**: Added support for [BFS-Prover-V2](https://arxiv.org/abs/2509.06493) and [BFS-Prover-V1](https://arxiv.org/abs/2502.03438) via Ollama (thanks to [@zeyu-zheng](https://github.com/zeyu-zheng)) [[setup](docs/ollama-models.md#bfs-provers)]
 - **06/2025**: Introduced iterative refinement mode for proof generation
 - **06/2025**: Added support for [Kimina-Prover](https://arxiv.org/abs/2504.11354) models via Ollama (thanks to @BoltonBailey)
@@ -31,6 +33,37 @@ apiKey = "<your-openai-api-key>"
 (Alternatively, you may set the API key using the environment variable `LLMLEAN_API_KEY` or using `set_option llmlean.apiKey "<your-api-key>"`.)
 
 You can also use other providers such as Anthropic, Together.AI, or any provider adhering to the OpenAI API. See [other providers](docs/other_providers.md).
+
+#### Codex app-server (experimental):
+
+LLMLean can also use `codex app-server` as a backend. This is different from the
+OpenAI API path: LLMLean talks to a local Codex app-server process over JSON-RPC,
+starts it lazily on the first Codex-backed tactic call, and reuses the same
+app-server process/thread for compatible later turns in the same Lean process.
+
+Install and authenticate Codex first, then configure:
+
+```toml
+api = "codex"
+model = "gpt-5.5"        # optional; omit to use Codex's configured default
+codexEffort = "xhigh"    # optional; model-dependent
+```
+
+Useful Lean-side diagnostics:
+
+```lean
+set_option llmlean.verbose true
+
+#llmlean_codex_models
+#llmlean_codex_status
+#llmlean_codex_reset
+```
+
+Verbose Codex logs show the configured model, reasoning effort, persistent
+session reuse/startup timings, parsed suggestions, and validation results.
+Codex app-server controls token limits; `maxTokens` is not sent as a completion
+API limit on this path. See [Codex app-server customization](docs/customization.md#codex-app-server-experimental)
+and [Codex app-server architecture](docs/codex-app-server-architecture.md).
 
 3. Add `llmlean` to lakefile:
 ```lean
@@ -138,3 +171,5 @@ lake update
 lake build
 ```
 Then manually try running `llmqed`/`llmstep` on the files under `LLMleanTest`.
+Codex app-server protocol smokes live under `LLMleanTest/Manual`; they use fake
+app-server processes and do not require live Codex authentication.
